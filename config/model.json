@@ -1,0 +1,11 @@
+{
+  "baseUrl": "http://127.0.0.1:8080/v1",
+  "alias": "glomus-qwen3.8-27b",
+  "contextWindow": 32768,
+  "maxTokens": 3000,
+  "launch": {
+    "executable": "D:/llama.cpp-releases/b11146/llama-server.exe",
+    "model": "D:/Models/GGUF/bartowski/orcarouter_Qwen3.8-27B-Uncensored-GGUF/orcarouter_Qwen3.8-27B-Uncensored-Q4_K_L.gguf",
+    "args": ["--ctx-size", "32768", "--parallel", "1", "--gpu-layers", "all", "--flash-attn", "on", "--jinja", "--reasoning", "off"]
+  }
+}

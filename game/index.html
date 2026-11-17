@@ -1,0 +1,542 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glomus</title>
+<style>
+  :root {
+    --bg: #14171b; --panel: #1c2026; --panel2: #232830; --line: #313842; --text: #e4e7eb; --muted: #9aa3ad;
+    --accent: #7cc4e8; --accent-ink: #0d2633; --good: #8fcf7a; --warn: #e8b86a; --bad: #e8806a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  button, textarea, input { font: inherit; color: inherit; }
+  button { background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  button.small { padding: 2px 8px; font-size: 12px; }
+  header { display: flex; align-items: center; gap: 14px; padding: 10px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  header h1 { font-size: 17px; margin: 0; letter-spacing: .3px; }
+  .tagline { color: var(--muted); font-size: 12px; font-style: italic; }
+  .card .log { font-size: 12px; color: var(--muted); margin: 4px 0 0; padding-left: 16px; }
+  .card .log .err { color: var(--warn); }
+  .pill { font-size: 12px; padding: 2px 9px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); }
+  .pill.ready { color: var(--good); border-color: #3e5a35; }
+  .pill.wait { color: var(--warn); border-color: #5c4a2c; }
+  .pill.off { color: var(--bad); border-color: #5c342c; }
+  .spacer { flex: 1; }
+  .clock { color: var(--muted); font-variant-numeric: tabular-nums; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 0; min-height: calc(100vh - 52px); }
+  .mapcol { padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .mapwrap { position: relative; width: 100%; }
+  canvas#map { display: block; width: 100%; height: auto; border-radius: 8px; cursor: crosshair; background: #000; touch-action: none; }
+  .hover { color: var(--muted); font-size: 12px; min-height: 18px; font-variant-numeric: tabular-nums; }
+  .timebar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .timebar input[type=range] { width: 160px; }
+  aside { border-left: 1px solid var(--line); background: var(--panel); padding: 14px 16px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; max-height: calc(100vh - 52px); }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin: 0 0 6px; font-weight: 600; }
+  textarea { width: 100%; background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 8px; resize: vertical; }
+  textarea:focus { outline: none; border-color: var(--accent); }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .hint { color: var(--muted); font-size: 12px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .chip { font-size: 12px; padding: 2px 9px; border-radius: 99px; background: transparent; }
+  .card { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  .card + .card { margin-top: 8px; }
+  .card.off { opacity: .55; }
+  .card.hi { border-color: var(--accent); }
+  .card .top { display: flex; gap: 8px; align-items: baseline; }
+  .card .name { font-weight: 600; flex: 1; }
+  .card .id { color: var(--muted); font-size: 12px; }
+  .card .whim { color: var(--muted); font-size: 12px; font-style: italic; }
+  .card .say { font-size: 13px; margin-top: 3px; }
+  .card .act { font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .card .problems { font-size: 12px; color: var(--warn); margin: 4px 0 0; padding-left: 16px; }
+  .card .buttons { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+  .card pre { font-size: 11px; max-height: 220px; overflow: auto; background: #111418; padding: 6px; border-radius: 4px; white-space: pre-wrap; }
+  .status-asking { color: var(--accent); }
+  .status-fizzled { color: var(--bad); }
+  details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+  .empty { color: var(--muted); font-size: 12px; }
+  @media (max-width: 900px) {
+    main { grid-template-columns: 1fr; }
+    aside { border-left: none; border-top: 1px solid var(--line); max-height: none; }
+    .mapcol { padding: 12px 16px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Glomus</h1>
+  <span class="tagline">Upward, not northward</span>
+  <span id="model" class="pill">model: checking…</span>
+  <span class="spacer"></span>
+  <span id="clock" class="clock">0:00 · clear</span>
+  <button id="rain" class="small" title="Start or stop the rain">Rain</button>
+  <button id="pause" class="small" title="Space">Pause</button>
+  <button id="speed" class="small" title="Simulation speed">1×</button>
+  <button id="newworld" class="small">New world</button>
+</header>
+<main>
+  <section class="mapcol">
+    <div class="mapwrap"><canvas id="map" width="960" height="640" aria-label="The world map. Click to choose a spot; drag to size it."></canvas></div>
+    <div id="hover" class="hover">Click the map to point at a spot; drag to size it. The model calls it "here".</div>
+    <div class="timebar">
+      <span class="hint">Rewind</span>
+      <input id="rewindRange" type="range" min="0" max="0" value="0" aria-label="How far back to rewind">
+      <span id="rewindLabel" class="hint">nothing to rewind yet</span>
+      <button id="rewind" class="small" disabled>Rewind</button>
+    </div>
+  </section>
+  <aside>
+    <section>
+      <h2>Make a whim</h2>
+      <textarea id="whim" rows="3" placeholder="Tell the world what you want. Carve a stream from the spring into the lake… make the stones here sweat water… a floodgate that opens every 30 seconds…"></textarea>
+      <div class="row" style="margin-top:6px">
+        <button id="ask" class="primary">Ask the world</button>
+        <span id="spotInfo" class="hint">No spot selected</span>
+        <button id="clearSpot" class="small" hidden>Clear spot</button>
+      </div>
+      <div class="chips" id="chips"></div>
+    </section>
+    <section>
+      <h2>Being made</h2>
+      <div id="queue"><div class="empty">Nothing yet. Whims you ask for appear here, and on the map, while the model works.</div></div>
+    </section>
+    <section>
+      <h2>Skeins</h2>
+      <div id="skeins"></div>
+    </section>
+    <section>
+      <details>
+        <summary>Write a plan by hand (JSON)</summary>
+        <p class="hint">The same format the model writes. Useful for trying threads without the model. "spot" means the selected spot.</p>
+        <textarea id="planText" rows="10" spellcheck="false"></textarea>
+        <div class="row" style="margin-top:6px">
+          <button id="applyPlan" class="small">Apply</button>
+          <button id="samplePlan" class="small">Load an example</button>
+          <span id="planNote" class="hint"></span>
+        </div>
+      </details>
+    </section>
+  </aside>
+</main>
+<script type="module">
+import * as WF from "./world.js";
+const { W, H, TPS, WET, MAX_H } = WF;
+// ?seed=N starts a fresh world from that seed in its own save slot, leaving the player's world alone.
+const SEED = new URLSearchParams(location.search).get("seed");
+const SAVE_KEY = SEED === null ? "glomus.save.v1" : "glomus.save.seeded";
+const token = (document.querySelector('meta[name="glomus-local"]') || {}).content || "";
+const $ = (id) => document.getElementById(id);
+
+const EXAMPLES = [
+  "Carve a stream from here down into the lake",
+  "Make the stones here sweat water",
+  "A floodgate here that opens for 10 seconds every 30 seconds",
+  "Let glowing moss creep along the river banks",
+  "Raise a little island in the lake",
+  "Pump water uphill from here to the north",
+];
+const SAMPLE_PLAN = {
+  name: "Sweating stones",
+  say: "The rocks here bead with water and it trickles off downhill.",
+  materials: [{ name: "wet stone", color: "#5f7d8a", erodes: 0.05 }],
+  edits: [{ area: "spot", material: "wet stone" }],
+  threads: [{ name: "Stones sweat", area: "spot", when: [{ material: ["wet stone"] }, { water: ["<", 0.3] }], do: [{ add_water: 0.3 }] }],
+};
+
+// ---------- state ----------
+let world = (SEED === null && loadSaved()) || WF.makeWorld(SEED === null ? (Math.random() * 2 ** 31) | 0 : Number(SEED) || 1);
+let spot = null;               // {x, y, r}
+let paused = false, speed = 1;
+let history = [];              // [{tick, snap}]
+const queue = [];              // whims being made
+let nextQueueId = 1, highlight = null, fizzles = [];
+
+function loadSaved() {
+  try { const raw = localStorage.getItem(SAVE_KEY); return raw ? WF.load(JSON.parse(raw)) : null; } catch (e) { return null; }
+}
+function saveNow() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(WF.save(world))); } catch (e) { /* private mode or full storage: play on */ } }
+
+// ---------- rendering ----------
+const canvas = $("map"), ctx = canvas.getContext("2d");
+const tiles = document.createElement("canvas"); tiles.width = W; tiles.height = H;
+const tctx = tiles.getContext("2d"), img = tctx.createImageData(W, H);
+let scale = 10;
+const grain = new Float32Array(W * H).map((_, i) => 0.94 + 0.12 * (((i * 2654435761) >>> 0) % 1000) / 1000);
+
+function hexRgb(hex) { const n = parseInt(hex.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
+
+function fit() {
+  const box = canvas.parentElement.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  const cssW = Math.max(200, box.width), cssH = cssW * H / W;
+  canvas.style.height = cssH + "px";
+  canvas.width = Math.round(cssW * dpr); canvas.height = Math.round(cssH * dpr);
+  scale = cssW / W;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener("resize", fit);
+
+let clockT = 0;
+function head(x, y) {
+  x = x < 0 ? 0 : x >= W ? W - 1 : x; y = y < 0 ? 0 : y >= H ? H - 1 : y;
+  return world.height[y * W + x] + world.water[y * W + x];
+}
+function drawTiles() {
+  const d = img.data, h = world.height, w = world.water, f = world.flux, m = world.mat;
+  const rgb = world.materials.map((mm) => hexRgb(mm.color));
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = y * W + x, c = rgb[m[i]] || [255, 0, 255];
+    const hn = h[Math.max(0, y - 1) * W + Math.max(0, x - 1)], hs = h[Math.min(H - 1, y + 1) * W + Math.min(W - 1, x + 1)];
+    let shade = Math.min(1.5, Math.max(0.5, 1 + (hn - hs) * 0.16)) * (0.78 + (h[i] / MAX_H) * 0.4) * grain[i];
+    // Contour lines every 2.5 m make the lie of the land readable.
+    const band = Math.floor(h[i] / 2.5);
+    if ((x < W - 1 && Math.floor(h[i + 1] / 2.5) < band) || (y < H - 1 && Math.floor(h[i + W] / 2.5) < band)) shade *= 0.8;
+    let r = c[0] * shade, g = c[1] * shade, b = c[2] * shade;
+    const wd = w[i];
+    if (wd > 0.02) {
+      // Thin films (rain, seepage) read as damp ground; real water is blue. Moving water gets glints that
+      // travel downhill along the water surface, so streams visibly flow.
+      const a = Math.min(0.9, (wd - 0.02) * 1.6), fast = Math.min(1, f[i] * 5);
+      let glint = 0;
+      if (fast > 0.08) {
+        const hx = head(x + 1, y) - head(x - 1, y), hy = head(x, y + 1) - head(x, y - 1), len = Math.hypot(hx, hy) || 1;
+        glint = fast * Math.max(0, Math.sin(clockT * 5 + 1.4 * (x * hx + y * hy) / len)) ** 6 * 70;
+      }
+      r = r * (1 - a) + (26 + 60 * fast + glint) * a; g = g * (1 - a) + (78 + 95 * fast + glint) * a; b = b * (1 - a) + (150 + 60 * fast + glint) * a;
+    }
+    const o = i * 4; d[o] = r; d[o + 1] = g; d[o + 2] = b; d[o + 3] = 255;
+  }
+  tctx.putImageData(img, 0, 0);
+}
+
+function strokeArea(area, style, dash, width = 2) {
+  ctx.save(); ctx.strokeStyle = style; ctx.lineWidth = width; ctx.setLineDash(dash || []);
+  const s = scale;
+  if (area === "everywhere") ctx.strokeRect(2, 2, W * s - 4, H * s - 4);
+  else if (area.circle) { ctx.beginPath(); ctx.arc((area.circle[0] + 0.5) * s, (area.circle[1] + 0.5) * s, (area.circle[2] + 0.5) * s, 0, Math.PI * 2); ctx.stroke(); }
+  else if (area.rect) ctx.strokeRect(area.rect[0] * s, area.rect[1] * s, area.rect[2] * s, area.rect[3] * s);
+  else if (area.path) {
+    ctx.lineWidth = Math.max(width, area.width * s); ctx.globalAlpha = 0.35; ctx.lineCap = "round"; ctx.lineJoin = "round";
+    ctx.beginPath(); area.path.forEach(([x, y], k) => (k ? ctx.lineTo : ctx.moveTo).call(ctx, (x + 0.5) * s, (y + 0.5) * s)); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function draw(now) {
+  clockT = now / 1000;
+  drawTiles();
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(tiles, 0, 0, W * scale, H * scale);
+  if (world.weather.raining) {
+    ctx.save(); ctx.strokeStyle = "rgba(190,215,240,.25)"; ctx.lineWidth = 1;
+    const t = now / 1000;
+    for (let k = 0; k < 140; k++) {
+      const x = ((k * 97.3 + t * 40) % (W * scale)), y = ((k * 53.7 + t * 420) % (H * scale));
+      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x - 3, y + 9); ctx.stroke();
+    }
+    ctx.restore();
+  }
+  if (highlight) for (const area of highlight) strokeArea(area, "rgba(124,196,232,.9)", [4, 3]);
+  // Whims being made: scaffolding where they will land.
+  for (const q of queue) {
+    if (q.status === "done" || !q.spot) continue;
+    const a = { circle: [q.spot.x, q.spot.y, q.spot.r] };
+    if (q.status === "fizzled") { strokeArea(a, "rgba(232,128,106,.9)", [2, 4]); continue; }
+    ctx.save(); ctx.lineDashOffset = -now / 60; strokeArea(a, "rgba(232,184,106,.95)", [6, 5], 2.5); ctx.restore();
+    ctx.fillStyle = "rgba(232,184,106,.95)"; ctx.font = "12px system-ui";
+    ctx.fillText(q.status === "asking" ? `working… ${Math.floor((Date.now() - q.started) / 1000)}s` : "waiting", (q.spot.x + q.spot.r + 1.5) * scale, (q.spot.y + 0.8) * scale);
+  }
+  fizzles = fizzles.filter((fz) => now - fz.at < 2500);
+  for (const fz of fizzles) {
+    const k = (now - fz.at) / 2500;
+    ctx.save(); ctx.globalAlpha = 1 - k; ctx.fillStyle = "#e8806a";
+    for (let p = 0; p < 10; p++) {
+      const ang = p * 0.63 + fz.at, rad = (fz.r + 1 + k * 4) * scale;
+      ctx.fillRect((fz.x + 0.5) * scale + Math.cos(ang) * rad, (fz.y + 0.5) * scale + Math.sin(ang) * rad, 3, 3);
+    }
+    ctx.font = "bold 12px system-ui"; ctx.fillText("fizzled", (fz.x - 2) * scale, (fz.y - fz.r - 1 - k * 2) * scale);
+    ctx.restore();
+  }
+  if (spot) strokeArea({ circle: [spot.x, spot.y, spot.r] }, "rgba(255,255,255,.95)", [], 2);
+}
+
+// ---------- spot picking ----------
+let dragging = null;
+function tileAt(ev) {
+  const r = canvas.getBoundingClientRect();
+  return [Math.max(0, Math.min(W - 1, Math.floor((ev.clientX - r.left) / scale))), Math.max(0, Math.min(H - 1, Math.floor((ev.clientY - r.top) / scale)))];
+}
+canvas.addEventListener("pointerdown", (ev) => {
+  const [x, y] = tileAt(ev);
+  dragging = { x, y }; spot = { x, y, r: 4 };
+  canvas.setPointerCapture(ev.pointerId); showSpot();
+});
+canvas.addEventListener("pointermove", (ev) => {
+  const [x, y] = tileAt(ev), i = y * W + x;
+  $("hover").textContent = `(${x}, ${y}) · ground ${world.height[i].toFixed(1)} m · water ${world.water[i].toFixed(2)} m · ${world.materials[world.mat[i]].name}`;
+  if (dragging) {
+    const r = Math.hypot(x - dragging.x, y - dragging.y);
+    if (r >= 1) { spot.r = Math.min(30, Math.round(r)); showSpot(); }
+  }
+});
+canvas.addEventListener("pointerup", () => { dragging = null; });
+canvas.addEventListener("pointerleave", () => { if (!dragging) $("hover").textContent = "Click the map to point at a spot; drag to size it. The model calls it \"here\"."; });
+function showSpot() {
+  $("spotInfo").textContent = spot ? `Spot: (${spot.x}, ${spot.y}), radius ${spot.r}` : "No spot selected";
+  $("clearSpot").hidden = !spot;
+}
+$("clearSpot").onclick = () => { spot = null; showSpot(); };
+
+// ---------- asking the model ----------
+let modelReady = false;
+async function api(path, body) {
+  const res = await fetch(path, { method: body ? "POST" : "GET", headers: { "Content-Type": "application/json", "X-Glomus-Token": token }, body: body ? JSON.stringify(body) : undefined });
+  if (!res.ok) throw new Error("server said " + res.status);
+  return res.json();
+}
+async function checkModel() {
+  const pill = $("model");
+  if (location.protocol === "file:" || !token) { pill.textContent = "no server: hand-written plans only"; pill.className = "pill off"; return; }
+  try {
+    const s = await api("/api/status");
+    modelReady = !!s.ready;
+    const busy = queue.some((q) => q.status === "asking");
+    pill.textContent = s.ready ? "model ready" : busy ? "model working" : s.reason || "model unavailable";
+    pill.className = "pill " + (s.ready || busy ? "ready" : /starting|busy/i.test(s.reason || "") ? "wait" : "off");
+  } catch (e) { pill.textContent = "server stopped"; pill.className = "pill off"; }
+}
+setInterval(checkModel, 10000);
+
+function ask() {
+  const text = $("whim").value.trim();
+  if (!text) { $("whim").focus(); return; }
+  queue.unshift({ id: nextQueueId++, whim: text, spot: spot ? { ...spot } : null, status: "waiting", problems: [], events: [], note: "" });
+  $("whim").value = "";
+  renderQueue(); pump();
+}
+$("ask").onclick = ask;
+$("whim").addEventListener("keydown", (ev) => { if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); ask(); } });
+for (const ex of EXAMPLES) {
+  const b = document.createElement("button"); b.className = "chip"; b.textContent = ex;
+  b.onclick = () => { $("whim").value = ex; $("whim").focus(); };
+  $("chips").appendChild(b);
+}
+
+async function pump() {
+  if (queue.some((q) => q.status === "asking")) return;
+  const q = [...queue].reverse().find((x) => x.status === "waiting");
+  if (!q) return;
+  q.status = "asking"; q.started = Date.now(); q.events = []; q.note = ""; renderQueue();
+  let start;
+  try {
+    start = await api("/api/whim", { whim: q.whim, spot: q.spot, world: WF.save(world) });
+  } catch (e) {
+    start = { ok: false, message: "Couldn't reach the game server (" + e.message + ")." };
+  }
+  if (!start.ok) {
+    if (start.error === "busy" || start.error === "provider") { q.status = "waiting"; q.note = start.message; renderQueue(); setTimeout(pump, 5000); return; }
+    fizzle(q, [start.message || "The game server refused the whim."]); renderQueue(); pump(); return;
+  }
+  // The shaper works on a copy of the world; poll its progress and apply the plan when it commits.
+  let job;
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 1000));
+    try { job = await api("/api/whim/" + start.id); } catch (e) { job = { status: "failed", result: { error: "Lost the game server (" + e.message + ")." } }; }
+    q.events = job.events || []; renderQueue();
+    if (job.status !== "working") break;
+  }
+  q.seconds = Math.round((Date.now() - q.started) / 1000);
+  const r = job.result || {};
+  if (job.status === "done" && r.committed && r.plan) {
+    const checked = WF.checkPlan(world, r.plan, q.spot);
+    const skein = checked.usable ? WF.acceptPlan(world, checked.clean, { whim: q.whim, spot: q.spot }) : null;
+    if (skein) {
+      skein.problems = (r.problems || []).concat(checked.problems); skein.seconds = q.seconds; skein.toolCalls = r.toolCalls;
+      queue.splice(queue.indexOf(q), 1); renderSkeins(); saveNow();
+    } else fizzle(q, ["The world changed while the model worked, and the plan no longer fits:", ...checked.problems]);
+  } else if (job.status === "done" && r.say && !r.error) {
+    q.status = "talked"; q.say = r.say;
+  } else {
+    fizzle(q, [r.error || "The model stopped without committing a plan."]);
+  }
+  renderQueue(); pump();
+}
+
+function fizzle(q, problems) {
+  q.problems = problems; q.status = "fizzled";
+  if (q.spot) fizzles.push({ ...q.spot, at: performance.now() });
+}
+
+const EVENT_TEXT = {
+  tool: (e) => e.label,
+  tried: (e) => `preview of "${e.name}": ${e.summary}`,
+  tool_error: (e) => `${e.tool} failed: ${e.message.split(/\n/)[0]}`,
+  said: (e) => `“${e.text}”`,
+  committed: (e) => `committed "${e.name}"`,
+  error: (e) => "error: " + e.message,
+};
+
+function renderQueue() {
+  const box = $("queue");
+  box.innerHTML = "";
+  if (!queue.length) { box.innerHTML = '<div class="empty">Nothing yet. Whims you ask for appear here, and on the map, while the model works.</div>'; return; }
+  for (const q of queue) {
+    const el = document.createElement("div"); el.className = "card";
+    const where = q.spot ? `at (${q.spot.x}, ${q.spot.y})` : "no spot";
+    const status = q.status === "asking" ? `<span class="status-asking">working ${Math.floor((Date.now() - q.started) / 1000)}s…</span>` :
+      q.status === "fizzled" ? `<span class="status-fizzled">fizzled</span>` : q.status === "talked" ? "answered" : "waiting";
+    el.innerHTML = `<div class="top"><span class="name"></span><span class="id"></span></div><div class="act"></div>`;
+    el.querySelector(".name").textContent = q.whim;
+    el.querySelector(".id").innerHTML = status;
+    el.querySelector(".act").textContent = where + (q.note ? " · " + q.note : "");
+    if (q.say) { const s = document.createElement("div"); s.className = "say"; s.textContent = q.say; el.appendChild(s); }
+    const steps = (q.events || []).filter((e) => EVENT_TEXT[e.kind] && !(e.kind === "tool" && e.tool === "try_plan"));
+    if (steps.length && q.status !== "talked") {
+      const ul = document.createElement("ul"); ul.className = "log";
+      for (const e of steps.slice(-5)) { const li = document.createElement("li"); li.textContent = EVENT_TEXT[e.kind](e); if (e.kind.includes("error")) li.className = "err"; ul.appendChild(li); }
+      el.appendChild(ul);
+    }
+    if (q.status === "fizzled") {
+      const ul = document.createElement("ul"); ul.className = "problems";
+      for (const p of q.problems.slice(0, 6)) { const li = document.createElement("li"); li.textContent = p; ul.appendChild(li); }
+      el.appendChild(ul);
+    }
+    if (q.status === "fizzled" || q.status === "talked") {
+      const b = document.createElement("div"); b.className = "buttons";
+      if (q.status === "fizzled") { const again = document.createElement("button"); again.className = "small"; again.textContent = "Try again"; again.onclick = () => { q.status = "waiting"; q.problems = []; renderQueue(); pump(); }; b.appendChild(again); }
+      const dismiss = document.createElement("button"); dismiss.className = "small"; dismiss.textContent = "Dismiss";
+      dismiss.onclick = () => { queue.splice(queue.indexOf(q), 1); renderQueue(); }; b.appendChild(dismiss);
+      el.appendChild(b);
+    }
+    box.appendChild(el);
+  }
+}
+
+// ---------- skeins ----------
+function skeinAreas(l) {
+  const areas = l.threads.map((r) => r.area).concat(l.edits.map((e) => e.area));
+  return areas.length ? areas : l.spot ? [{ circle: [l.spot.x, l.spot.y, l.spot.r] }] : [];
+}
+function renderSkeins() {
+  const box = $("skeins");
+  box.innerHTML = "";
+  for (const l of [...world.skeins].reverse()) {
+    const el = document.createElement("div"); el.className = "card" + (l.on ? "" : " off"); el.dataset.id = l.id;
+    el.innerHTML = `<div class="top"><span class="name"></span><span class="id">#${l.id}</span></div>`;
+    el.querySelector(".name").textContent = l.name;
+    if (l.whim) { const w = document.createElement("div"); w.className = "whim"; w.textContent = "“" + l.whim + "”"; el.appendChild(w); }
+    if (l.say) { const s = document.createElement("div"); s.className = "say"; s.textContent = l.say; el.appendChild(s); }
+    const act = document.createElement("div"); act.className = "act"; act.dataset.role = "activity"; el.appendChild(act);
+    if (l.problems && l.problems.length) {
+      const d = document.createElement("details"); d.innerHTML = `<summary>${l.problems.length} adjustment(s)</summary>`;
+      const ul = document.createElement("ul"); ul.className = "problems";
+      for (const p of l.problems) { const li = document.createElement("li"); li.textContent = p; ul.appendChild(li); }
+      d.appendChild(ul); el.appendChild(d);
+    }
+    const b = document.createElement("div"); b.className = "buttons";
+    const toggle = document.createElement("button"); toggle.className = "small"; toggle.textContent = l.on ? "Switch off" : "Switch on";
+    toggle.onclick = () => { WF.setSkeinOn(world, l.id, !l.on); renderSkeins(); saveNow(); };
+    b.appendChild(toggle);
+    if (l.kind !== "nature") {
+      const erase = document.createElement("button"); erase.className = "small"; erase.textContent = "Erase";
+      erase.title = "Stop its threads and put back the ground its edits changed";
+      erase.onclick = () => { WF.eraseSkein(world, l.id); highlight = null; renderSkeins(); saveNow(); };
+      b.appendChild(erase);
+    }
+    el.appendChild(b);
+    const det = document.createElement("details"); det.innerHTML = "<summary>Show its plan</summary>";
+    const pre = document.createElement("pre");
+    pre.textContent = JSON.stringify({ materials: l.materials, edits: l.edits, threads: l.threads, switch_off: l.switched }, null, 1);
+    det.appendChild(pre); el.appendChild(det);
+    el.addEventListener("mouseenter", () => { highlight = skeinAreas(l); el.classList.add("hi"); });
+    el.addEventListener("mouseleave", () => { highlight = null; el.classList.remove("hi"); });
+    box.appendChild(el);
+  }
+  updateActivity();
+}
+function updateActivity() {
+  for (const el of document.querySelectorAll("#skeins .card")) {
+    const l = world.skeins.find((x) => x.id === Number(el.dataset.id));
+    if (!l) continue;
+    const fires = WF.threadActivity(world, l), parts = [];
+    l.threads.forEach((r, k) => parts.push(`${r.name}: ${fires[k]} tile${fires[k] === 1 ? "" : "s"}`));
+    const edits = l.edits.length ? `${l.edits.length} edit${l.edits.length === 1 ? "" : "s"} to the ground. ` : "";
+    el.querySelector('[data-role="activity"]').textContent = edits + (parts.length ? "Acting now: " + parts.join(" · ") : "");
+  }
+}
+
+// ---------- hand-written plans ----------
+$("samplePlan").onclick = () => { $("planText").value = JSON.stringify(SAMPLE_PLAN, null, 2); };
+$("applyPlan").onclick = () => {
+  let plan;
+  try { plan = JSON.parse($("planText").value); } catch (e) { $("planNote").textContent = "That isn't valid JSON: " + e.message; return; }
+  const checked = WF.checkPlan(world, plan, spot);
+  if (!checked.usable) { $("planNote").textContent = "Nothing usable: " + checked.problems.join("; "); return; }
+  const skein = WF.acceptPlan(world, checked.clean, { whim: "(written by hand)", spot });
+  skein.problems = checked.problems;
+  $("planNote").textContent = checked.problems.length ? `Applied with ${checked.problems.length} adjustment(s).` : "Applied.";
+  renderSkeins(); saveNow();
+};
+
+// ---------- time ----------
+$("pause").onclick = () => { paused = !paused; $("pause").textContent = paused ? "Play" : "Pause"; };
+$("speed").onclick = () => { speed = speed === 1 ? 2 : speed === 2 ? 4 : speed === 4 ? 8 : 1; $("speed").textContent = speed + "×"; };
+$("rain").onclick = () => { world.weather.raining = !world.weather.raining; world.weather.until = world.tick + (world.weather.raining ? 20 : 90) * TPS; };
+$("newworld").onclick = () => {
+  if (!confirm("Start a new world? This one, its skeins and its rewind history will be gone.")) return;
+  world = WF.makeWorld((Math.random() * 2 ** 31) | 0); history = []; queue.length = 0; spot = null;
+  showSpot(); renderQueue(); renderSkeins(); saveNow();
+};
+document.addEventListener("keydown", (ev) => {
+  if (ev.target.closest("textarea, input")) return;
+  if (ev.code === "Space") { ev.preventDefault(); $("pause").click(); }
+  if (ev.key === "Escape") { spot = null; showSpot(); }
+});
+const fmt = (ticks) => { const s = Math.max(0, Math.round(ticks / TPS)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); };
+function updateRewind() {
+  const range = $("rewindRange");
+  range.max = Math.max(0, history.length - 1);
+  if (!history.length) { $("rewindLabel").textContent = "nothing to rewind yet"; $("rewind").disabled = true; return; }
+  const pick = history[history.length - 1 - Number(range.value)];
+  $("rewindLabel").textContent = Number(range.value) === 0 && history.length ? `to ${fmt(world.tick - pick.tick)} ago` : `to ${fmt(world.tick - pick.tick)} ago`;
+  $("rewind").disabled = false;
+}
+$("rewindRange").oninput = updateRewind;
+$("rewind").onclick = () => {
+  const k = history.length - 1 - Number($("rewindRange").value), pick = history[k];
+  if (!pick) return;
+  WF.restore(world, pick.snap); history = history.slice(0, k); $("rewindRange").value = 0;
+  renderSkeins(); updateRewind(); saveNow();
+};
+
+let last = performance.now(), carry = 0, lastSave = 0, lastUi = 0;
+function frame(now) {
+  const dt = Math.min(0.25, (now - last) / 1000); last = now;
+  if (!paused) {
+    carry += dt * TPS * speed;
+    let steps = Math.min(Math.floor(carry), 40); carry -= Math.floor(carry);
+    while (steps-- > 0) {
+      WF.step(world);
+      if (world.tick % 50 === 0) { history.push({ tick: world.tick, snap: WF.snapshot(world) }); if (history.length > 36) history.shift(); }
+    }
+  }
+  draw(now);
+  if (now - lastUi > 500) {
+    lastUi = now; updateActivity(); updateRewind();
+    $("clock").textContent = fmt(world.tick) + " · " + (world.weather.raining ? "raining" : "clear");
+    $("rain").textContent = world.weather.raining ? "Stop rain" : "Rain";
+  }
+  if (now - lastSave > 10000) { lastSave = now; saveNow(); }
+  requestAnimationFrame(frame);
+}
+
+fit(); showSpot(); renderQueue(); renderSkeins(); checkModel();
+requestAnimationFrame(frame);
+window.addEventListener("beforeunload", saveNow);
+</script>
+</body>
+</html>

@@ -1,0 +1,32 @@
+{
+  "voice": "af_sky",
+  "speed": 1.0,
+  "videos": [
+    {
+      "input": "glomus-demo.mp4",
+      "output": "glomus-demo-voiced.mp4",
+      "lines": [
+        { "at": 1.0, "text": "This is Glomus. A little living landscape, and an A.I. that reshapes it on a whim." },
+        { "at": 6.6, "text": "Point at a spot, and say what you want." },
+        { "at": 11.0, "text": "The model runs right here, on this P.C. It looks around, tests its plan in a quick simulation, fixes what's wrong, then commits." },
+        { "at": 20.5, "text": "One sentence, and the ridge has a waterfall." },
+        { "at": 25.6, "text": "Whims can be about behavior, not just shape." },
+        { "at": 37.4, "text": "Glowing moss, creeping along every bank the water touches." },
+        { "at": 44.6, "text": "Or about time. A wildfire that burns for one minute, then goes out." },
+        { "at": 50.5, "text": "You can watch it think, in the sidebar." },
+        { "at": 67.2, "text": "And nothing stops. Fire, moss and water all run on the same threads, so they tangle." },
+        { "at": 74.2, "text": "Every whim is a skein. Switch it off, erase it," },
+        { "at": 79.6, "text": "or rewind the whole world." },
+        { "at": 83.4, "text": "Glomus. Upward, not northward." }
+      ]
+    },
+    {
+      "input": "glomus-miniature.mp4",
+      "output": "glomus-miniature-voiced.mp4",
+      "lines": [
+        { "at": 1.2, "text": "Ten whims. One small world. Four minutes, squeezed into forty-five seconds." },
+        { "at": 40.0, "text": "Glomus. Upward, not northward." }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "name": "glomus",
+  "version": "1.0.0",
+  "description": "A living landscape that a local model reshapes and reprograms on your whims.",
+  "main": "index.js",
+  "scripts": {
+    "test": "node game/tools/world_test.js",
+    "start": "node server/server.js",
+    "eval": "node tools/eval.js",
+    "record-demo": "node tools/record-demo.js && node tools/edit-demo.js",
+    "record-timelapse": "node tools/record-timelapse.js && node tools/edit-timelapse.js",
+    "voice-over": "node tools/voice-over.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@mariozechner/pi-agent-core": "^0.73.1",
+    "@mariozechner/pi-ai": "^0.73.1"
+  },
+  "private": true,
+  "devDependencies": {
+    "kokoro-js": "^1.2.1",
+    "playwright-core": "^1.56.1"
+  }
+}

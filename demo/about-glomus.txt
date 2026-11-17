@@ -1,0 +1,21 @@
+GLOMUS - Upward, not northward
+
+It's a little living landscape seen from above, with rivers, lakes, meadows and snow on the peaks.
+You click a spot and type a whim: "carve a stream from here into the lake", "make the stones here
+sweat water", "a floodgate that bursts every 30 seconds", "let glowing moss creep along the riverbanks".
+
+An AI running on my own PC (no cloud) makes it happen. It doesn't just paint the map; it writes new
+rules into how the world works. Before committing, it tests its plan in a quick simulation, sees what
+went wrong, and fixes it. You can watch it think in the sidebar.
+
+Then everything you've asked for keeps running and starts tangling together. The moss follows the
+water the floodgate releases, rain turns the peaks white, and the meltwater finds the new streams.
+Nothing has to be useful. You just watch what your whims turn into.
+
+The name is Latin for a ball of thread. Every whim adds threads, and the world is what they wind into.
+Very early prototype, but it works.
+
+In this folder:
+  glomus-demo.mp4       a narrated 90-second session (the waits for the AI are sped up)
+  glomus-miniature.mp4  a stop-motion, tilt-shift timelapse of a busier session
+  glomus-poster.png     a still
