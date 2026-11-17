@@ -25,7 +25,15 @@ const args = process.argv.slice(2);
 const port0 = Number(args[args.indexOf("--port") + 1]) || 8840;
 const config = Model.loadConfig(ROOT);
 const model = localModel(config);
-const token = crypto.randomBytes(18).toString("base64url");
+// The page's access token lives in the workspace, so restarting the server doesn't lock out open pages.
+const token = (() => {
+  const file = path.join(WORKSPACE, "token.txt");
+  try { const t = fs.readFileSync(file, "utf8").trim(); if (/^[\w-]{24,}$/.test(t)) return t; } catch { /* First run. */ }
+  const t = crypto.randomBytes(18).toString("base64url");
+  fs.mkdirSync(WORKSPACE, { recursive: true });
+  fs.writeFileSync(file, t);
+  return t;
+})();
 const jobs = new Map();
 let active = null, lastSeen = Date.now();
 

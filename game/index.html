@@ -295,9 +295,14 @@ $("clearSpot").onclick = () => { spot = null; showSpot(); };
 let modelReady = false;
 async function api(path, body) {
   const res = await fetch(path, { method: body ? "POST" : "GET", headers: { "Content-Type": "application/json", "X-Glomus-Token": token }, body: body ? JSON.stringify(body) : undefined });
+  if (res.status === 403) throw new Error(STALE);
   if (!res.ok) throw new Error("server said " + res.status);
   return res.json();
 }
+// A page opened before the server got a new access token can't talk to it until reloaded.
+const STALE = "The game server no longer recognizes this page. Reload the page to reconnect" +
+  (SEED === null ? "; your world is saved." : " (a ?seed= page starts its world over).");
+function serverMessage(e, what) { return e.message === STALE ? STALE : what + " (" + e.message + ")."; }
 async function checkModel() {
   const pill = $("model");
   if (location.protocol === "file:" || !token) { pill.textContent = "no server: hand-written plans only"; pill.className = "pill off"; return; }
@@ -307,7 +312,7 @@ async function checkModel() {
     const busy = queue.some((q) => q.status === "asking");
     pill.textContent = s.ready ? "model ready" : busy ? "model working" : s.reason || "model unavailable";
     pill.className = "pill " + (s.ready || busy ? "ready" : /starting|busy/i.test(s.reason || "") ? "wait" : "off");
-  } catch (e) { pill.textContent = "server stopped"; pill.className = "pill off"; }
+  } catch (e) { pill.textContent = e.message === STALE ? "reload the page to reconnect" : "server stopped"; pill.className = "pill off"; }
 }
 setInterval(checkModel, 10000);
 
@@ -335,7 +340,7 @@ async function pump() {
   try {
     start = await api("/api/whim", { whim: q.whim, spot: q.spot, world: WF.save(world) });
   } catch (e) {
-    start = { ok: false, message: "Couldn't reach the game server (" + e.message + ")." };
+    start = { ok: false, message: serverMessage(e, "Couldn't reach the game server") };
   }
   if (!start.ok) {
     if (start.error === "busy" || start.error === "provider") { q.status = "waiting"; q.note = start.message; renderQueue(); setTimeout(pump, 5000); return; }
@@ -345,7 +350,7 @@ async function pump() {
   let job;
   for (;;) {
     await new Promise((r) => setTimeout(r, 1000));
-    try { job = await api("/api/whim/" + start.id); } catch (e) { job = { status: "failed", result: { error: "Lost the game server (" + e.message + ")." } }; }
+    try { job = await api("/api/whim/" + start.id); } catch (e) { job = { status: "failed", result: { error: serverMessage(e, "Lost the game server") } }; }
     q.events = job.events || []; renderQueue();
     if (job.status !== "working") break;
   }
