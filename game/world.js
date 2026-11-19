@@ -28,7 +28,7 @@ const BUILTIN = [
   { name: "meadow", color: "#6c9a46", erodes: 0.3 },
   { name: "snow", color: "#eef2f6", erodes: 0.1 },
 ];
-const LIMITS = { threads: 6, edits: 8, materials: 4, conds: 6, actions: 6, pathPoints: 40, skeins: 60, materialsTotal: 24 };
+const LIMITS = { threads: 6, edits: 8, materials: 4, powers: 3, conds: 6, actions: 6, pathPoints: 40, skeins: 60, materialsTotal: 24 };
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 const isNum = (v) => typeof v === "number" && Number.isFinite(v);
@@ -64,7 +64,7 @@ function blank(seed) {
     version: 1, w: W, h: H, seed, tick: 0, rng: seed | 0, wrng: (seed ^ 0x5bd1e995) | 0,
     height: new Float32Array(N), water: new Float32Array(N), silt: new Float32Array(N),
     mat: new Uint8Array(N), flux: new Float32Array(N),
-    materials: BUILTIN.map((m) => ({ ...m })), skeins: [], nextSkein: 1,
+    materials: BUILTIN.map((m) => ({ ...m })), skeins: [], nextSkein: 1, nextUse: 1,
     weather: { raining: false, until: 900 },
     _compiled: new Map(),
   };
@@ -379,12 +379,30 @@ function checkAction(raw, names, problems) {
   return null;
 }
 
+// Models sometimes pack several conditions into one object ({"material": [...], "chance": 0.1, "within": 60}).
+// Reading only the first key would silently drop the rest (including a promised time limit), so split them.
+const COND_KEYS = ["not", "material", "water", "height", "near", "chance", "cycle", "raining", "within", "after"];
+const COND_COMPANIONS = { near: ["count"], cycle: ["from", "to"] };
+function splitConds(list) {
+  const out = [];
+  for (const c of list) {
+    const keys = c && typeof c === "object" && !Array.isArray(c) ? COND_KEYS.filter((k) => k in c) : [];
+    if (keys.length <= 1) { out.push(c); continue; }
+    for (const k of keys) {
+      const one = { [k]: c[k] };
+      for (const extra of COND_COMPANIONS[k] || []) if (extra in c) one[extra] = c[extra];
+      out.push(one);
+    }
+  }
+  return out;
+}
+
 function checkThread(raw, names, problems, spot) {
   const label = raw && typeof raw.name === "string" ? raw.name.trim().slice(0, 60) : "";
   const p = [];
   if (!raw || typeof raw !== "object") { problems.push("each thread must be an object"); return null; }
   const area = checkArea(raw.area ?? raw.where ?? raw.shape, p, spot);
-  const whenRaw = raw.when === undefined ? [] : Array.isArray(raw.when) ? raw.when : [raw.when];
+  const whenRaw = splitConds(raw.when === undefined ? [] : Array.isArray(raw.when) ? raw.when : [raw.when]);
   const doRaw = raw.do === undefined ? (raw.then === undefined ? [] : raw.then) : raw.do;
   const acts = (Array.isArray(doRaw) ? doRaw : [doRaw]).slice(0, LIMITS.actions).map((a) => checkAction(a, names, p)).filter(Boolean);
   const conds = whenRaw.slice(0, LIMITS.conds).map((c) => checkCond(c, names, p)).filter(Boolean);
@@ -427,6 +445,72 @@ function checkMaterial(raw, problems) {
   return out;
 }
 
+// A tool's icon: one emoji. Flags are left out: Windows shows them as letters.
+const GRAPHEMES = typeof Intl !== "undefined" && Intl.Segmenter ? new Intl.Segmenter("en", { granularity: "grapheme" }) : null;
+function checkIcon(v) {
+  if (typeof v !== "string") return "";
+  const t = v.trim();
+  if (!t || t.length > 16 || !/\p{Extended_Pictographic}/u.test(t) || /[\u{1F1E6}-\u{1F1FF}]/u.test(t)) return "";
+  if (GRAPHEMES && [...GRAPHEMES.segment(t)].length !== 1) return "";
+  return t;
+}
+
+/** The tool a new one replaces: by id ("3.0") or by name, among tools still in the palette. */
+function findReplaced(world, ref) {
+  const key = String(ref).trim().toLowerCase();
+  for (const s of world.skeins) for (const p of s.powers || []) if (!p.retired && (p.id === key || p.name.toLowerCase() === key)) return p;
+  return null;
+}
+
+// A tool's edits and threads act where the player uses it, so they have no area of their own. While checking them,
+// this stand-in area takes the place of the use's circle.
+const USE_AREA = { circle: [0, 0, 1] };
+function checkPower(raw, names, problems, world) {
+  if (!raw || typeof raw !== "object") { problems.push("each tool must be an object"); return null; }
+  const name = typeof raw.name === "string" ? raw.name.trim().slice(0, 24) : "";
+  const label = `tool "${name || "unnamed"}"`;
+  if (!name) { problems.push("a tool needs a name, so one was dropped"); return null; }
+  const b = raw.brush ?? raw.radius ?? raw.size;
+  let r = 3, stroke = null;
+  if (isNum(b) || (typeof b === "string" && b.trim() !== "" && Number.isFinite(Number(b)))) r = Number(b);
+  else if (typeof b === "string" && /^(stroke|drag|path|line)$/i.test(b.trim())) stroke = 2;
+  else if (b && typeof b === "object") {
+    const sw = b.stroke ?? b.path ?? b.line ?? b.drag;
+    if (sw !== undefined) stroke = sw === true || typeof sw === "object" ? (b.width ?? 2) : sw;
+    else { r = b.circle ?? b.radius ?? b.r ?? 3; if (Array.isArray(r)) r = r[r.length - 1]; }
+  }
+  let brush;
+  if (stroke !== null) {
+    const w = checkNumber(stroke, 1, 8, `${label} stroke width`, problems);
+    if (w === null) return null;
+    brush = { stroke: Math.round(w * 2) / 2 };
+  } else {
+    r = checkNumber(r, 1, 12, `${label} brush radius`, problems);
+    if (r === null) return null;
+    brush = { circle: Math.round(r * 2) / 2 };
+  }
+  const sub = [];
+  const asUse = (x, what) => {
+    if (!x || typeof x !== "object") return x;
+    if (x.area !== undefined || x.where !== undefined || x.shape !== undefined) sub.push(`${what} area was ignored: a tool acts where the player clicks`);
+    const { where, shape, ...rest } = x;
+    return { ...rest, area: USE_AREA };
+  };
+  const listOf = (v) => (Array.isArray(v) ? v : v ? [v] : []);
+  const edits = listOf(raw.edits).slice(0, 4).map((e) => checkEdit(asUse(e, "an edit's"), names, sub, null)).filter(Boolean).map(({ area, ...e }) => e);
+  const threads = listOf(raw.threads ?? raw.rules).slice(0, 3).map((t) => checkThread(asUse(t, "a thread's"), names, sub, null)).filter(Boolean).map(({ area, ...t }) => t);
+  for (const m of sub) problems.push(`${label}: ${m}`);
+  if (!edits.length && !threads.length) { problems.push(`${label} was dropped: it has no usable edits or threads`); return null; }
+  const icon = checkIcon(raw.icon);
+  if (raw.icon !== undefined && raw.icon !== "" && !icon) problems.push(`${label}: its icon must be one emoji (no flags), so it shows its initials instead`);
+  const out = { name, icon, brush, edits, threads };
+  if (raw.replaces !== undefined && raw.replaces !== null && raw.replaces !== "") {
+    const old = world && findReplaced(world, raw.replaces);
+    if (old) out.replaces = old.id; else problems.push(`${label}: there is no tool "${raw.replaces}" to replace, so it was added as a new tool`);
+  }
+  return out;
+}
+
 function skeinId(v) {
   if (isNum(v)) return Math.round(v);
   const m = typeof v === "string" && v.match(/(\d+)/);
@@ -460,11 +544,14 @@ function checkPlan(world, plan, spot) {
   if (threadsRaw.length > LIMITS.threads) problems.push(`only the first ${LIMITS.threads} threads were kept`);
   const edits = editsRaw.slice(0, LIMITS.edits).map((e) => checkEdit(e, names, problems, spot)).filter(Boolean);
   const threads = threadsRaw.slice(0, LIMITS.threads).map((r) => checkThread(r, names, problems, spot)).filter(Boolean);
+  const powersRaw = list(plan.powers ?? plan.tools, "powers");
+  if (powersRaw.length > LIMITS.powers) problems.push(`only the first ${LIMITS.powers} tools were kept`);
+  const powers = powersRaw.slice(0, LIMITS.powers).map((t) => checkPower(t, names, problems, world)).filter(Boolean);
   const say = typeof plan.say === "string" ? plan.say.trim().slice(0, 400) : "";
   const name = typeof plan.name === "string" ? plan.name.trim().slice(0, 60) : "";
-  const usable = materials.length + switchOff.length + edits.length + threads.length > 0;
+  const usable = materials.length + switchOff.length + edits.length + threads.length + powers.length > 0;
   if (!usable && !say) problems.push("nothing in the reply could be used");
-  return { clean: { name, say, materials, switch_off: switchOff, edits, threads }, problems, usable };
+  return { clean: { name, say, materials, switch_off: switchOff, edits, threads, powers }, problems, usable };
 }
 
 // ---------- compiling threads ----------
@@ -488,8 +575,9 @@ function countNear(world, i, what) {
   return n;
 }
 
-function compileCond(world, c, skein) {
-  if (c.not) { const inner = compileCond(world, c.not, skein); return { global: inner.global, test: (i) => !inner.test(i) }; }
+/** since: the tick a thread's clock starts (its skein's commit, or a tool's use). */
+function compileCond(world, c, since) {
+  if (c.not) { const inner = compileCond(world, c.not, since); return { global: inner.global, test: (i) => !inner.test(i) }; }
   if (c.material) { const set = new Set(c.material.map((m) => matIndex(world, m))); return { test: (i) => set.has(world.mat[i]) }; }
   if (c.water) { const f = compare(c.water); return { test: (i) => f(world.water[i]) }; }
   if (c.height) { const f = compare(c.height); return { test: (i) => f(world.height[i]) }; }
@@ -497,12 +585,12 @@ function compileCond(world, c, skein) {
   if ("chance" in c) { const p = perTick(c.chance); return { test: () => rand(world) < p }; }
   if (c.cycle) {
     const len = Math.max(1, Math.round(c.cycle * TPS)), from = c.from * TPS, to = c.to * TPS;
-    return { global: true, test: () => { const t = world.tick % len; return from <= to ? t >= from && t < to : t >= from || t < to; } };
+    return { global: true, kind: "cycle", test: () => { const t = world.tick % len; return from <= to ? t >= from && t < to : t >= from || t < to; } };
   }
-  if ("raining" in c) return { global: true, test: () => world.weather.raining === c.raining };
-  // Time since the skein was committed: "for a minute" is within 60, "after a while" is after N.
-  if ("within" in c) { const end = skein.tick + c.within * TPS; return { global: true, test: () => world.tick < end }; }
-  if ("after" in c) { const start = skein.tick + c.after * TPS; return { global: true, test: () => world.tick >= start }; }
+  if ("raining" in c) return { global: true, kind: c.raining ? "rain" : "dry", test: () => world.weather.raining === c.raining };
+  // Time since the skein was committed or the tool was used: "for a minute" is within 60, "after a while" is after N.
+  if ("within" in c) { const end = since + c.within * TPS; return { global: true, kind: "time", test: () => world.tick < end }; }
+  if ("after" in c) { const start = since + c.after * TPS; return { global: true, kind: "time", test: () => world.tick >= start }; }
   return { test: () => false };
 }
 
@@ -522,11 +610,39 @@ function neighborFor(world, i, dir) {
   return best;
 }
 
-function compileAction(world, a) {
+// ---------- change records: what a skein or a tool use did to the ground ----------
+// h: tile -> height change (metres, after clamping), m: tile -> [material before its first write, material it last
+// wrote]. Undo subtracts the height change and puts a material back only where the tile still holds what this record
+// wrote, so later changes by other whims survive. Water and silt are never recorded: water moves on.
+function newRec() { return { h: {}, m: {} }; }
+function recHeight(rec, i, d) { if (d) rec.h[i] = (rec.h[i] || 0) + d; }
+/** reach: a tool use's live tile list; tiles it paints join it, so its later rules follow what it spread. */
+function recMat(rec, i, before, after, reach) {
+  const r = rec.m[i];
+  if (r) { r[1] = after; return; }
+  rec.m[i] = [before, after];
+  if (reach && !reach.set.has(i)) { reach.set.add(i); reach.cells.push(i); }
+}
+function undoRec(world, rec) {
+  if (!rec) return;
+  for (const k in rec.h) { const i = +k; world.height[i] = clamp(world.height[i] - rec.h[k], 0, MAX_H); }
+  for (const k in rec.m) { const i = +k, [before, after] = rec.m[k]; if (world.mat[i] === after) world.mat[i] = before; }
+}
+/** Fold a newer record into an older aggregate: changes add up; a material keeps its earliest before and latest after. */
+function foldRec(into, rec) {
+  for (const k in rec.h) into.h[k] = (into.h[k] || 0) + rec.h[k];
+  for (const k in rec.m) into.m[k] = into.m[k] ? [into.m[k][0], rec.m[k][1]] : rec.m[k].slice();
+}
+const recSize = (rec) => (rec ? Object.keys(rec.h).length + Object.keys(rec.m).length : 0);
+
+function compileAction(world, a, rec, reach) {
   const h = world.height, w = world.water, s = world.silt;
-  if (a.set_material) { const m = matIndex(world, a.set_material); return (i) => { world.mat[i] = m; }; }
-  if ("raise" in a) { const d = a.raise * DT; return (i) => { h[i] = Math.min(MAX_H, h[i] + d); }; }
-  if ("lower" in a) { const d = a.lower * DT; return (i) => { h[i] = Math.max(0, h[i] - d); }; }
+  if (a.set_material) {
+    const m = matIndex(world, a.set_material);
+    return rec ? (i) => { const b = world.mat[i]; if (b !== m) { world.mat[i] = m; recMat(rec, i, b, m, reach); } } : (i) => { world.mat[i] = m; };
+  }
+  if ("raise" in a) { const d = a.raise * DT; return rec ? (i) => { const b = h[i]; h[i] = Math.min(MAX_H, b + d); recHeight(rec, i, h[i] - b); } : (i) => { h[i] = Math.min(MAX_H, h[i] + d); }; }
+  if ("lower" in a) { const d = a.lower * DT; return rec ? (i) => { const b = h[i]; h[i] = Math.max(0, b - d); recHeight(rec, i, h[i] - b); } : (i) => { h[i] = Math.max(0, h[i] - d); }; }
   if ("add_water" in a) { const d = a.add_water * DT; return (i) => { w[i] += d; }; }
   if ("drain_water" in a) { const d = a.drain_water * DT; return (i) => { w[i] = Math.max(0, w[i] - d); }; }
   if (a.push_water) {
@@ -545,23 +661,43 @@ function compileAction(world, a) {
       const [dx, dy] = N8[Math.floor(rand(world) * 8)];
       const x = (i % W) + dx, y = Math.floor(i / W) + dy;
       if (x < 0 || y < 0 || x >= W || y >= H) return;
-      const j = y * W + x;
-      if (!onto || onto.has(world.mat[j])) world.mat[j] = m;
+      const j = y * W + x, b = world.mat[j];
+      if ((!onto || onto.has(b)) && b !== m) { world.mat[j] = m; if (rec) recMat(rec, j, b, m, reach); }
     };
   }
   return () => {};
 }
 
+function compileThread(world, t, cells, since, rec, reach, use) {
+  const conds = t.when.map((c) => compileCond(world, c, since));
+  return {
+    cells, use, useId: use ? use.id : undefined, global: conds.filter((c) => c.global).map((c) => c.test), globalKinds: conds.filter((c) => c.global).map((c) => c.kind),
+    local: conds.filter((c) => !c.global).map((c) => c.test), localConds: t.when.filter((_, j) => !conds[j].global), acts: t.do.map((a) => compileAction(world, a, rec, reach)), fires: 0,
+  };
+}
+
+/** The area one use acts on: a circle around the click, or a path along the drag. */
+function useArea(use) { return use.path ? { path: use.path, width: use.w } : { circle: [use.at[0], use.at[1], use.r] }; }
+
+/** A use's footprint plus every tile it has painted: where its lingering rules run. */
+function useReach(use) {
+  const cells = Array.from(areaShape(useArea(use)).cells), set = new Set(cells);
+  for (const k in use.rec ? use.rec.m : {}) { const i = +k; if (!set.has(i)) { set.add(i); cells.push(i); } }
+  return { cells, set };
+}
+
 function compiled(world, skein) {
   let threads = world._compiled.get(skein.id);
   if (!threads) {
-    threads = skein.threads.map((r) => {
-      const conds = r.when.map((c) => compileCond(world, c, skein));
-      return {
-        cells: areaShape(r.area).cells, global: conds.filter((c) => c.global).map((c) => c.test),
-        local: conds.filter((c) => !c.global).map((c) => c.test), acts: r.do.map((a) => compileAction(world, a)), fires: 0,
-      };
-    });
+    const rec = skein.kind === "nature" ? null : skein.rec || null;
+    threads = skein.threads.map((t) => compileThread(world, t, areaShape(t.area).cells, skein.tick, rec, null));
+    for (const p of skein.powers || []) {
+      if (!p.threads.length) continue;
+      for (const u of p.uses) {
+        const reach = useReach(u);
+        for (const t of p.threads) threads.push(compileThread(world, t, reach.cells, u.tick, u.rec || p.rec, reach, u));
+      }
+    }
     world._compiled.set(skein.id, threads);
   }
   return threads;
@@ -573,20 +709,22 @@ function runThreads(world) {
     for (const r of compiled(world, skein)) {
       r.fires = 0;
       if (r.global.some((t) => !t())) continue;
-      const cells = r.cells, local = r.local, acts = r.acts;
-      outer: for (let k = 0; k < cells.length; k++) {
+      // Tiles a use reaches this tick join its area from the next tick on, so spreading can't race across the map.
+      const cells = r.cells, n = cells.length, local = r.local, acts = r.acts;
+      outer: for (let k = 0; k < n; k++) {
         const i = cells[k];
         for (let c = 0; c < local.length; c++) if (!local[c](i)) continue outer;
         for (let a = 0; a < acts.length; a++) acts[a](i);
         r.fires++;
       }
+      if (r.use && r.fires && !r.use.acted) r.use.acted = true;
     }
   }
 }
 
-/** How many tiles each of a skein's threads acted on in the last tick. */
+/** How many tiles each of a skein's own threads acted on in the last tick (tool uses: see useStates). */
 function threadActivity(world, skein) {
-  return skein.on ? compiled(world, skein).map((r) => r.fires) : skein.threads.map(() => 0);
+  return skein.on ? compiled(world, skein).slice(0, skein.threads.length).map((r) => r.fires) : skein.threads.map(() => 0);
 }
 
 // ---------- skeins ----------
@@ -595,39 +733,50 @@ function addSkein(world, spec) {
     id: world.nextSkein++, kind: spec.kind || "whim", name: spec.name || "Untitled", whim: spec.whim || "", say: spec.say || "",
     on: true, tick: world.tick, threads: spec.threads || [], edits: spec.edits || [], materials: spec.materials || [],
     switched: spec.switched || [], undo: { cells: [], height: [], mat: [] }, materialBefore: [], spot: spec.spot || null,
+    rec: spec.kind === "nature" ? null : newRec(), powers: [],
   };
   world.skeins.push(skein);
   return skein;
 }
 
-function applyEdits(world, skein) {
-  const seen = new Set(skein.undo.cells);
-  for (const e of skein.edits) {
-    const { cells, weight } = areaShape(e.area), m = e.material ? matIndex(world, e.material) : -1;
+/** Apply edits once, recording into rec. area overrides each edit's own area (a tool's use). Returns tiles changed. */
+function applyEditList(world, edits, rec, area) {
+  let changed = 0;
+  const touched = new Set();
+  for (const e of edits) {
+    const { cells, weight } = areaShape(area || e.area), m = e.material ? matIndex(world, e.material) : -1;
     for (let k = 0; k < cells.length; k++) {
-      const i = cells[k], wt = weight[k];
-      if (!seen.has(i) && (e.raise || e.lower || e.level !== undefined || m >= 0)) {
-        seen.add(i); skein.undo.cells.push(i); skein.undo.height.push(world.height[i]); skein.undo.mat.push(world.mat[i]);
-      }
-      let v = world.height[i];
+      const i = cells[k], wt = weight[k], before = world.height[i];
+      let v = before;
       if (e.raise) v += e.raise * wt;
       if (e.lower) v -= e.lower * wt;
       if (e.level !== undefined) v += (e.level - v) * wt;
       world.height[i] = clamp(v, 0, MAX_H);
-      if (m >= 0 && wt > 0.25) world.mat[i] = m;
-      if (e.water) world.water[i] += e.water * wt;
+      const dh = world.height[i] - before;
+      if (rec) recHeight(rec, i, dh);
+      let hit = Math.abs(dh) > 0.01;
+      if (m >= 0 && wt > 0.25 && world.mat[i] !== m) { if (rec) recMat(rec, i, world.mat[i], m, null); world.mat[i] = m; hit = true; }
+      if (e.water && e.water * wt > 0.005) { world.water[i] += e.water * wt; hit = true; }
+      if (hit) touched.add(i);
     }
   }
+  changed = touched.size;
+  return changed;
 }
+function applyEdits(world, skein) { applyEditList(world, skein.edits, skein.rec); }
 
 /** Accept a checked plan as a new skein. Returns the skein, or null when the plan only talked. */
 function acceptPlan(world, clean, meta = {}) {
-  if (!clean.materials.length && !clean.switch_off.length && !clean.edits.length && !clean.threads.length) return null;
+  const powers = clean.powers || [];
+  if (!clean.materials.length && !clean.switch_off.length && !clean.edits.length && !clean.threads.length && !powers.length) return null;
   const skein = addSkein(world, {
-    name: clean.name || (clean.threads[0] && clean.threads[0].name) || (meta.whim || "A whim").slice(0, 40),
+    name: clean.name || (powers[0] && powers[0].name) || (clean.threads[0] && clean.threads[0].name) || (meta.whim || "A whim").slice(0, 40),
     whim: meta.whim || "", say: clean.say, spot: meta.spot || null,
     threads: clean.threads, edits: clean.edits, materials: clean.materials,
   });
+  skein.powers = powers.map((p, k) => ({ ...JSON.parse(JSON.stringify(p)), id: `${skein.id}.${k}`, uses: [], rec: newRec() }));
+  // A tool that replaces an older one takes its place in the palette; the old tool's past uses keep acting.
+  for (const p of skein.powers) if (p.replaces) { const old = findPower(world, p.replaces); if (old && !old.power.retired) old.power.retired = "replaced"; }
   for (const m of clean.materials) {
     const existing = world.materials.find((x) => x.name === m.name);
     if (existing) {
@@ -643,6 +792,7 @@ function acceptPlan(world, clean, meta = {}) {
     if (other && other.on) { other.on = false; skein.switched.push(id); }
   }
   applyEdits(world, skein);
+  tidyRecords(world);
   return skein;
 }
 
@@ -651,11 +801,22 @@ function setSkeinOn(world, id, on) {
   if (skein) skein.on = !!on;
 }
 
-/** Erase a whim: stop its threads, put back the ground its edits changed, undo its switches and recolors. */
+/**
+ * Erase a whim: stop its threads and tools, take back what it and every use of its tools did to the ground (by change,
+ * so later whims' changes stay), and undo its switches and recolors. It doesn't replay the world; Rewind does that.
+ */
 function eraseSkein(world, id) {
   const k = world.skeins.findIndex((l) => l.id === id);
   if (k < 0 || world.skeins[k].kind === "nature") return false;
   const skein = world.skeins[k];
+  for (const p of skein.powers || []) {
+    for (let n = p.uses.length - 1; n >= 0; n--) undoRec(world, p.uses[n].rec);
+    undoRec(world, p.rec);
+    // Erasing a replacement puts the tool it replaced back in the palette.
+    if (p.replaces) { const old = findPower(world, p.replaces); if (old && old.power.retired === "replaced") delete old.power.retired; }
+  }
+  undoRec(world, skein.rec);
+  // Saves from before change records used before-values.
   for (let n = skein.undo.cells.length - 1; n >= 0; n--) {
     const i = skein.undo.cells[n];
     world.height[i] = skein.undo.height[n]; world.mat[i] = skein.undo.mat[n];
@@ -665,6 +826,297 @@ function eraseSkein(world, id) {
   world.skeins.splice(k, 1);
   world._compiled.delete(id);
   return true;
+}
+
+// ---------- tools (powers) and their uses ----------
+const UNDO_USES = 50, LIVE_USES = 24, RECORD_BUDGET = 200000;
+
+function findPower(world, powerId) {
+  for (const s of world.skeins) for (const p of s.powers || []) if (p.id === powerId) return { skein: s, power: p };
+  return null;
+}
+
+/** Where a thread is in its own time: open (may act now), ended (never again), or starting in some seconds. */
+function threadWindow(t, since, now) {
+  const w = t.when.find((c) => "within" in c), a = t.when.find((c) => "after" in c);
+  const ended = !!w && now >= since + w.within * TPS;
+  const start = a ? since + a.after * TPS : since;
+  return { ended, open: !ended && now >= start, startsIn: now < start ? (start - now) / TPS : 0 };
+}
+
+/**
+ * The state of every tool use: pending (before its after), acting, waiting (a world condition like rain or a cycle
+ * is false), holding (has acted; none of its tiles match now, e.g. at its height limit; can wake again), idle (never
+ * matched anything: "only acts where…"), starting (just used), expired (can never act again), done (instant only),
+ * off (its skein is switched off). Map useId -> {state, text}.
+ */
+function useStates(world) {
+  const out = new Map(), now = world.tick;
+  for (const s of world.skeins) for (const p of s.powers || []) {
+    const entries = p.threads.length && s.on ? compiled(world, s).filter((e) => e.useId !== undefined) : [];
+    for (const u of p.uses) {
+      if (!p.threads.length) { out.set(u.id, { state: "done", text: "done" }); continue; }
+      const wins = p.threads.map((t) => threadWindow(t, u.tick, now));
+      if (wins.every((w) => w.ended)) { out.set(u.id, { state: "expired", text: "finished" }); continue; }
+      if (!s.on) { out.set(u.id, { state: "off", text: "switched off" }); continue; }
+      const mine = entries.filter((e) => e.useId === u.id);
+      if (mine.some((e) => e.fires > 0)) { u.acted = true; out.set(u.id, { state: "acting", text: "acting" }); continue; }
+      const open = p.threads.map((t, k) => ({ t, e: mine[k], w: wins[k] })).filter((x) => x.w.open);
+      if (!open.length) {
+        const secs = Math.ceil(Math.min(...wins.filter((w) => !w.ended).map((w) => w.startsIn)));
+        out.set(u.id, { state: "pending", text: `starts in ${secs} s` }); continue;
+      }
+      const blocked = open.map((x) => x.e && x.e.globalKinds.find((kind, j) => kind !== "time" && !x.e.global[j]()));
+      if (blocked.every(Boolean)) {
+        const kind = blocked[0];
+        out.set(u.id, { state: "waiting", text: kind === "rain" ? "waiting for rain" : kind === "dry" ? "waiting for dry weather" : "between pulses" }); continue;
+      }
+      if (u.acted) {
+        out.set(u.id, { state: "holding", text: holdingText(open[0].e) }); continue;
+      }
+      if (now - u.tick < 2 * TPS) { out.set(u.id, { state: "starting", text: "starting" }); continue; }
+      const local = open[0].t.when.filter((c) => !("within" in c || "after" in c || c.cycle || "raining" in c || (c.not && "raining" in c.not))).map(condText);
+      out.set(u.id, { state: "idle", text: local.length ? `nothing here matches: it only acts ${local.join(", ")}` : "nothing to do here" });
+    }
+  }
+  return out;
+}
+
+/** Why a use that has acted is resting now: the condition that fails on most of its tiles, in plain words. */
+function holdingText(e) {
+  if (!e) return "resting";
+  let worst = -1, most = -1;
+  const sample = e.cells.length > 300 ? e.cells.filter((_, k) => k % Math.ceil(e.cells.length / 300) === 0) : e.cells;
+  e.localConds.forEach((c, j) => {
+    if ("chance" in c) return;
+    let fails = 0; for (const i of sample) if (!e.local[j](i)) fails++;
+    if (fails > most) { most = fails; worst = j; }
+  });
+  const c = e.localConds[worst];
+  if (!c) return "resting";
+  if (c.height) return `holding at ${num(c.height[1])} m`;
+  if (c.water) return c.water[0].includes("<") ? "the water has arrived" : "waiting for water here";
+  if (c.material) return `resting: nothing here is ${c.material.join(" or ")} now`;
+  if (c.near) return `resting: ${condText(c)} isn't true here now`;
+  return "resting";
+}
+
+const LIVE = new Set(["pending", "acting", "waiting", "holding", "idle", "starting", "off"]);
+
+/**
+ * Use a tool at (x, y) with radius r. Applies its edits once there and attaches its threads. Returns
+ * {ok: true, use, changed} or {ok: false, message}. Refuses when its skein is off or it already acts in 24 places.
+ */
+function usePower(world, powerId, where) {
+  const f = findPower(world, powerId);
+  if (!f) return { ok: false, message: "That tool no longer exists." };
+  const { skein, power } = f;
+  if (power.retired) return { ok: false, message: `${power.name} isn't in the palette any more.` };
+  if (!skein.on) return { ok: false, message: `${power.name} is switched off. Switch its skein on to use it.` };
+  if (power.threads.length) {
+    const states = useStates(world), live = power.uses.filter((u) => LIVE.has((states.get(u.id) || {}).state)).length;
+    if (live >= LIVE_USES) return { ok: false, message: `${power.name} is acting in ${LIVE_USES} places. Undo or erase some first.` };
+  }
+  let use;
+  if (power.brush.stroke) {
+    // A drag: its points, thinned to at most 40 with both ends kept, at the chosen width.
+    let pts = (where.path || [[where.x, where.y]]).map(([px, py]) => [clamp(Math.round(px), 0, W - 1), clamp(Math.round(py), 0, H - 1)]);
+    if (pts.length > LIMITS.pathPoints) { const n = LIMITS.pathPoints, step = (pts.length - 1) / (n - 1); pts = Array.from({ length: n }, (_, k) => pts[Math.round(k * step)]); }
+    const w = clamp(Math.round((where.w ?? where.r ?? power.brush.stroke) * 2) / 2, 1, 8);
+    use = { id: world.nextUse++, at: pts[pts.length - 1], path: pts, w, r: w / 2, tick: world.tick, rec: newRec() };
+  } else {
+    const x = clamp(Math.round(where.x), 0, W - 1), y = clamp(Math.round(where.y), 0, H - 1);
+    const r = clamp(Math.round((where.r ?? power.brush.circle) * 2) / 2, 1, 12);
+    use = { id: world.nextUse++, at: [x, y], r, tick: world.tick, rec: newRec() };
+  }
+  const changed = applyEditList(world, power.edits, use.rec, useArea(use));
+  power.uses.push(use);
+  world._compiled.delete(skein.id);
+  tidyUses(world);
+  tidyRecords(world);
+  return { ok: true, use, changed };
+}
+
+/** Take a tool off the palette (removed: true) or put it back. Everything it made, and its uses, stay. */
+function setPowerRemoved(world, powerId, removed) {
+  const f = findPower(world, powerId);
+  if (!f) return false;
+  if (removed) f.power.retired = f.power.retired || "removed"; else delete f.power.retired;
+  return true;
+}
+
+/** Take back one use: stop its rules and subtract what it did to the ground. */
+function undoUse(world, useId) {
+  for (const s of world.skeins) for (const p of s.powers || []) {
+    const k = p.uses.findIndex((u) => u.id === useId);
+    if (k < 0) continue;
+    undoRec(world, p.uses[k].rec);
+    p.uses.splice(k, 1);
+    world._compiled.delete(s.id);
+    return true;
+  }
+  return false;
+}
+
+/** The most recent use that can still be undone, or null. */
+function lastUse(world) {
+  let best = null;
+  for (const s of world.skeins) for (const p of s.powers || []) for (const u of p.uses) if (u.rec && (!best || u.id > best.use.id)) best = { use: u, power: p, skein: s };
+  return best;
+}
+
+/** Keep per-use records for the last 50 uses; older uses that can never act again fold into their tool's record. */
+function tidyUses(world) {
+  const all = [];
+  for (const s of world.skeins) for (const p of s.powers || []) for (const u of p.uses) all.push({ s, p, u });
+  if (all.length <= UNDO_USES) return;
+  all.sort((a, b) => b.u.id - a.u.id);
+  const states = useStates(world);
+  for (const { s, p, u } of all.slice(UNDO_USES)) {
+    const st = (states.get(u.id) || {}).state;
+    if (st !== "expired" && st !== "done") continue;
+    foldRec(p.rec, u.rec);
+    p.uses.splice(p.uses.indexOf(u), 1);
+    world._compiled.delete(s.id);
+  }
+}
+
+/** Bound the world's change records. Past the budget, the oldest skeins can no longer take back their ground changes. */
+function tidyRecords(world) {
+  let total = 0;
+  const per = world.skeins.map((s) => {
+    const n = recSize(s.rec) + (s.powers || []).reduce((t, p) => t + recSize(p.rec) + p.uses.reduce((q, u) => q + recSize(u.rec), 0), 0);
+    total += n; return n;
+  });
+  for (let k = 0; k < world.skeins.length && total > RECORD_BUDGET; k++) {
+    const s = world.skeins[k];
+    if (s.kind === "nature" || !per[k]) continue;
+    s.rec = null; for (const p of s.powers || []) { p.rec = null; for (const u of p.uses) u.rec = null; }
+    s.recDropped = true; total -= per[k];
+    world._compiled.delete(s.id);
+  }
+}
+
+/** A copy of a save without change records: the model doesn't need them, and requests stay small. */
+function saveForModel(world) {
+  const out = save(world);
+  for (const s of out.skeins) {
+    delete s.rec;
+    for (const p of s.powers || []) { delete p.rec; p.uses = p.uses.map(({ rec, ...u }) => u); }
+  }
+  return out;
+}
+
+// ---------- plain-language descriptions, generated from the plan (never from the model's prose) ----------
+const num = (v) => String(Math.round(v * 100) / 100);
+const secs = (s) => (s >= 60 && s % 60 === 0 ? `${s / 60} min` : `${num(s)} s`);
+
+function placeText(area) {
+  if (area === "everywhere") return "everywhere";
+  if (area.circle) return `in a circle at (${area.circle[0]},${area.circle[1]}) r ${area.circle[2]}`;
+  if (area.rect) return `in a ${area.rect[2]}×${area.rect[3]} rectangle from (${area.rect[0]},${area.rect[1]})`;
+  const p = area.path;
+  return `along a path (${p[0][0]},${p[0][1]})→(${p[p.length - 1][0]},${p[p.length - 1][1]}), ${area.width} wide`;
+}
+
+function condText(c) {
+  if (c.not && "raining" in c.not) return condText({ raining: !c.not.raining });
+  if (c.not) return "unless " + condText(c.not);
+  if (c.material) return "on " + c.material.join(" or ");
+  if (c.water) return `where water is ${c.water[0].includes(">") ? "over" : "under"} ${num(c.water[1])} m deep`;
+  if (c.height) return `where the ground is ${c.height[0].includes(">") ? "above" : "below"} ${num(c.height[1])} m`;
+  if (c.near) {
+    const [op, n] = c.count, what = c.near === "water" ? "wet" : c.near;
+    if (op === "<" && n <= 1) return `with no ${what} tiles beside it`;
+    return `next to ${op === ">" ? "more than " + num(n) : op === ">=" ? "at least " + num(n) : op === "<" ? "fewer than " + num(n) : "at most " + num(n)} ${what} tile${n === 1 && op !== ">" ? "" : "s"}`;
+  }
+  if ("chance" in c) return `${num(c.chance * 100)}% chance per second`;
+  if (c.cycle) return `from ${num(c.from)} to ${num(c.to)} s of every ${num(c.cycle)} s`;
+  if ("raining" in c) return c.raining ? "while it rains" : "while it's dry";
+  if ("within" in c) return `for the first ${secs(c.within)}`;
+  if ("after" in c) return `starting ${secs(c.after)} in`;
+  return "?";
+}
+
+function actionText(a) {
+  if (a.set_material) return `turns the ground to ${a.set_material}`;
+  if ("raise" in a) return `raises the ground ${num(a.raise)} m a second`;
+  if ("lower" in a) return `lowers the ground ${num(a.lower)} m a second`;
+  if ("add_water" in a) return `adds ${num(a.add_water)} m of water a second (it flows away downhill)`;
+  if ("drain_water" in a) return `removes ${num(a.drain_water)} m of water a second`;
+  if (a.push_water) return `pushes water ${a.push_water} (${num(a.amount)}× a second)`;
+  if (a.spread) return `spreads ${a.spread} to neighbouring tiles${a.onto ? " of " + a.onto.join(" or ") : ""}, ${num(a.chance * 100)}% chance a second (it can spread beyond this area)`;
+  return "?";
+}
+
+/** How a thread ends, if ever. "Holding" limits (height) are not endings: they start again if the ground changes. */
+function endingText(t, since = "it lands") {
+  const within = t.when.find((c) => "within" in c);
+  if (within) return `Stops for good ${secs(within.within)} after ${since}.`;
+  const lowers = t.do.some((a) => "lower" in a), raises = t.do.some((a) => "raise" in a);
+  const h = t.when.find((c) => c.height), wetStop = t.when.find((c) => c.water && c.water[0].includes("<"));
+  if (wetStop && (lowers || raises || t.do.some((a) => "add_water" in a))) {
+    const floor = h && lowers && h.height[0].includes(">") ? ` (and never below ${num(h.height[1])} m)` : "";
+    return `Stops on each tile once water there is ${num(wetStop.water[1])} m deep${floor}, and starts again if it dries; runs until switched off.`;
+  }
+  if (h && lowers && h.height[0].includes(">")) return `Stops lowering at ${num(h.height[1])} m, and lowers again if the ground rises; runs until switched off.`;
+  if (h && raises && h.height[0].includes("<")) return `Stops raising at ${num(h.height[1])} m, and raises again if the ground sinks; runs until switched off.`;
+  return "Never stops on its own.";
+}
+
+/** A thread in plain words: when and where, what it does, and whether it ever stops. */
+function threadText(t, where, since) {
+  const timing = t.when.filter((c) => "after" in c || c.cycle || "raining" in c || (c.not && "raining" in c.not)).map(condText);
+  const local = t.when.filter((c) => !("within" in c || "after" in c || c.cycle || "raining" in c || (c.not && "raining" in c.not))).map(condText);
+  const head = [timing.join(", "), where, local.join(", ")].filter(Boolean).join(", ");
+  const s = head.charAt(0).toUpperCase() + head.slice(1);
+  const acts = t.do.map(actionText).join("; ");
+  return `“${t.name}” — ${s}: ${since ? acts.replace("(it can spread beyond this area)", "(it can spread beyond where you click; this use's rules follow it)") : acts}. ${endingText(t, since)}`;
+}
+
+function editParts(e) {
+  const parts = [];
+  if (e.level !== undefined) parts.push(`flattens the ground toward ${num(e.level)} m`);
+  if (e.lower) parts.push(`lowers the ground up to ${num(e.lower)} m`);
+  if (e.raise) parts.push(`raises the ground up to ${num(e.raise)} m`);
+  if (e.material) parts.push(`paints it ${e.material}`);
+  if (e.water) parts.push(`pours in up to ${num(e.water)} m of water`);
+  return parts.join(", ");
+}
+function editText(e) { return `Once, when it lands, ${placeText(e.area)}: ${editParts(e)}.`; }
+
+/** What one use of a tool does at once, in a few words ("raises the ground up to 3 m"), or "". */
+function powerOnceText(p) { return p.edits.map(editParts).join("; "); }
+
+/** A tool in plain words: how it's used, what each use does once, and what each use keeps doing. */
+function powerText(p) {
+  const drag = !!p.brush.stroke, where = drag ? "along where you dragged" : "where you clicked";
+  const head = `Tool ${p.icon ? p.icon + " " : ""}“${p.name}” (${drag ? `drag across the map to use it; ${num(p.brush.stroke)} wide to start` : `click the map to use it; radius ${num(p.brush.circle)} to start`}).`;
+  const once = p.edits.map((e) => `Each use, once, ${where}: ${editParts(e)}.`);
+  const keeps = p.threads.map((t) => `Each use ${p.edits.length ? "then " : ""}keeps going: ` + threadText(t, where, "each use"));
+  const repl = p.replaces ? ` It replaces tool ${p.replaces} in the palette; that tool's earlier uses keep going.` : "";
+  return [head, ...once, ...keeps].join(" ") + repl;
+}
+
+/**
+ * Plain lines saying what a clean plan (or a skein) does. Built only from the plan, so it can't promise
+ * anything the plan doesn't contain. Accepts a checkPlan result's clean plan or a skein.
+ */
+function explainPlan(plan, world) {
+  const lines = [];
+  for (const m of plan.materials || []) {
+    const known = BUILTIN.some((b) => b.name === m.name);
+    lines.push(`${known ? "Changes" : "New ground:"} ${m.name}${m.color ? " (" + m.color + ")" : ""}${m.erodes !== undefined ? `, water wears it away at ${num(m.erodes)}` : ""}.`);
+  }
+  for (const e of plan.edits || []) lines.push(editText(e));
+  for (const t of plan.threads || []) lines.push(threadText(t, placeText(t.area)));
+  for (const p of plan.powers || []) lines.push(powerText(p));
+  for (const id of plan.switch_off || plan.switched || []) {
+    const s = world && world.skeins.find((k) => k.id === id);
+    lines.push(`Switches off skein ${id}${s ? " (" + s.name + ")" : ""}.`);
+  }
+  if (!lines.length) lines.push("Changes nothing.");
+  return lines;
 }
 
 // ---------- reports for the model ----------
@@ -711,7 +1163,8 @@ function describe(world, spot) {
   lines.push("Skeins (id, name, on/off, threads):");
   for (const l of world.skeins) {
     const threads = l.threads.map((r) => `"${r.name}" [${describeArea(r.area)}]`).join("; ") || "no threads";
-    lines.push(`  ${l.id}. ${l.name} (${l.on ? "on" : "off"}): ${threads}`);
+    const tools = (l.powers || []).map((p) => `tool "${p.name}" (id ${p.id}, ${p.brush.stroke ? "drag, width " + p.brush.stroke : "click, radius " + p.brush.circle}, used ${p.uses.length} time${p.uses.length === 1 ? "" : "s"}${p.retired ? ", " + p.retired + ", not in the palette" : ""})`).join("; ");
+    lines.push(`  ${l.id}. ${l.name} (${l.on ? "on" : "off"}): ${threads}${tools ? "; " + tools : ""}`);
   }
   if (spot) {
     const { cells } = areaShape({ circle: [spot.x, spot.y, spot.r] });
@@ -746,7 +1199,7 @@ function fromB64(str, Type, length) {
   if (out.length !== length) throw new Error("save is damaged");
   return out;
 }
-const META = ["seed", "tick", "rng", "wrng", "nextSkein"];
+const META = ["seed", "tick", "rng", "wrng", "nextSkein", "nextUse"];
 
 function save(world) {
   const out = { version: world.version };
@@ -762,7 +1215,7 @@ function save(world) {
 function load(data) {
   if (!data || data.version !== 1) throw new Error("unknown save version");
   const world = blank(data.seed);
-  for (const k of META) world[k] = data[k];
+  for (const k of META) if (data[k] !== undefined) world[k] = data[k];
   world.weather = { ...data.weather };
   world.materials = JSON.parse(JSON.stringify(data.materials));
   world.skeins = JSON.parse(JSON.stringify(data.skeins));
@@ -774,14 +1227,14 @@ function load(data) {
 /** A quick in-memory copy for rewinding. */
 function snapshot(world) {
   return {
-    tick: world.tick, rng: world.rng, wrng: world.wrng, nextSkein: world.nextSkein, weather: { ...world.weather },
+    tick: world.tick, rng: world.rng, wrng: world.wrng, nextSkein: world.nextSkein, nextUse: world.nextUse, weather: { ...world.weather },
     materials: JSON.parse(JSON.stringify(world.materials)), skeins: JSON.parse(JSON.stringify(world.skeins)),
     height: world.height.slice(), water: world.water.slice(), silt: world.silt.slice(), flux: world.flux.slice(), mat: world.mat.slice(),
   };
 }
 
 function restore(world, snap) {
-  world.tick = snap.tick; world.rng = snap.rng; world.wrng = snap.wrng; world.nextSkein = snap.nextSkein; world.weather = { ...snap.weather };
+  world.tick = snap.tick; world.rng = snap.rng; world.wrng = snap.wrng; world.nextSkein = snap.nextSkein; world.nextUse = snap.nextUse ?? world.nextUse; world.weather = { ...snap.weather };
   world.materials = JSON.parse(JSON.stringify(snap.materials)); world.skeins = JSON.parse(JSON.stringify(snap.skeins));
   for (const k of ["height", "water", "silt", "flux", "mat"]) world[k].set(snap[k]);
   world._compiled = new Map();
@@ -790,5 +1243,6 @@ function restore(world, snap) {
 export {
   W, H, N, TPS, DT, MAX_H, WET, LIMITS, BUILTIN,
   makeWorld, step, checkPlan, acceptPlan, setSkeinOn, eraseSkein, describe, describeArea, areaShape,
-  threadActivity, save, load, snapshot, restore, countNear,
+  threadActivity, save, load, snapshot, restore, countNear, explainPlan,
+  usePower, undoUse, lastUse, useStates, findPower, saveForModel, LIVE_USES, powerOnceText, useArea, setPowerRemoved,
 };

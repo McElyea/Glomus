@@ -4,7 +4,7 @@
   "description": "A living landscape that a local model reshapes and reprograms on your whims.",
   "main": "index.js",
   "scripts": {
-    "test": "node game/tools/world_test.js",
+    "test": "node game/tools/world_test.js && node game/tools/claims_test.js",
     "start": "node server/server.js",
     "eval": "node tools/eval.js",
     "record-demo": "node tools/record-demo.js && node tools/edit-demo.js",

@@ -4,6 +4,7 @@
 import { Agent } from "@mariozechner/pi-agent-core";
 import { Type } from "typebox";
 import * as WF from "../game/world.js";
+import { CAPS, admissions, checkClaims, requestNeeds, routeOutcome } from "./claims.js";
 
 export const MAX_TOOL_CALLS = 8;
 export const PREVIEW_SECONDS = 20;
@@ -16,14 +17,31 @@ whim; you make it real by committing a plan. You work with tools on a copy of th
   read_skein(id)       the full plan of an existing skein
   try_plan(plan)       check a plan and simulate it for ${PREVIEW_SECONDS} seconds on a copy; reports what changed
   commit(plan)         apply the plan to the real world. This ends your turn.
+  propose(plan, unsupported)   offer the closest thing you can make when part of the whim can't be done: a
+                       full plan (with its threads and edits), plus a short list of what's missing, a few words
+                       each. The player sees both and approves it or not. This ends your turn.
+  decline(say)         when nothing reasonable fits: tell the player why, briefly. This ends your turn.
 
 Work like this: look where you need detail, try_plan, fix what the preview shows is wrong, then commit.
-You have at most ${MAX_TOOL_CALLS} tool calls, so don't over-explore. Always finish with commit, unless the player
-only asked a question; then just answer in one or two sentences.
+You have at most ${MAX_TOOL_CALLS} tool calls, so don't over-explore. Finish with commit when the whole whim is done
+as asked, propose when part of it can't be (with the closest thing you can make), or decline when nothing
+reasonable fits. If you can name an alternative, propose it rather than describing it in a decline. unsupported
+names only abilities Glomus lacks ("double-click", "days"), never what your plan does. If the
+player only asked a question, just answer in one or two sentences.
+
+WHAT GLOMUS CAN'T DO (use propose or decline; never pretend):
+  - player input beyond tools: a click on the map picks the spot, or uses the tool the player picked from their
+    palette (see TOOLS), and a drag uses a drag tool. There are no double-clicks, right-clicks, keys, holding the
+    mouse, hovering or scroll wheels to bind anything to.
+  - real time: there are no days or hours, only game seconds and minutes. For "2 days", propose a span of
+    seconds or minutes and propose it with unsupported ["days"].
+  - sounds, creatures or anything that moves except water, camera, zoom or 3D views, anything outside the map.
+The game reads the player's request: if it asks for one of these, your plan is shown to the player as a proposal
+for them to approve, whichever tool you call. So say plainly what you made instead and how it differs.
 
 A PLAN is a JSON object:
 {"name": "short title", "say": "one or two sentences to the player about what you made",
- "materials": [...], "edits": [...], "threads": [...], "switch_off": [skein ids]}
+ "materials": [...], "edits": [...], "threads": [...], "powers": [...], "switch_off": [skein ids]}
 Leave out any list you don't need.
 
 AREA, where something happens:
@@ -56,7 +74,7 @@ CONDITIONS:
   {"after": 120}                              only from 120 seconds after you commit: "after a while"
   {"not": CONDITION}
 The world has no days; if the player names a long time, pick a span in seconds that suits the game (a few
-minutes at most) and tell them what you chose.
+minutes at most), propose it with unsupported ["days"], and tell them what you chose.
 ACTIONS, amounts are per second on EACH tile where the thread acts (so a big area multiplies them; the
 built-in spring adds 2 per second on about 9 tiles):
   {"add_water": 1}   {"drain_water": 1}   {"raise": 0.2}   {"lower": 0.2}
@@ -68,6 +86,30 @@ MATERIALS: soil, sand, stone, meadow and snow are built in; water is not a mater
 {"name": "glowmoss", "color": "#7fffb0", "erodes": 0.2}; erodes (0-1) is how fast running water wears it
 away. Listing an existing material again changes its color or erodes.
 SWITCH_OFF lists skein ids to turn off, for when the player wants something stopped.
+
+TOOLS ("powers"): when the player wants to do something themselves, wherever they choose ("a tool that raises a
+hill where I click", "when I click, water floods in"), give them a tool. It appears in their palette with its
+icon; they pick it and click the map. Nothing happens until they use it.
+  {"name": "Sink", "icon": "🕳️", "brush": {"circle": 4}, "edits": [...], "threads": [...]}
+  - brush {"circle": r} (r 1-12): each use acts on a circle of radius r around the click (the player can resize it).
+  - brush {"stroke": w} (w 1-8): a drag tool; each use acts along the path the player drags, w tiles wide
+    ("a tool that digs a channel where I drag", walls, paint brushes).
+  - edits and threads have NO area: they act where the player clicks. Edits happen once per use; threads keep
+    acting there, each use separately, with within/after counted from that use ("for 10 s after each click").
+  - a height limit holds rather than ends: {"height": [">", 6]} on a lowering thread keeps the ground at or below
+    6 m, and lowers it again if it rises. To sink until water arrives, sense it: lower while {"water": ["<", 0.2]}
+    and {"height": [">", 1]}, so each tile stops once it's wet (and a pit with no water near stays dry at 1 m).
+  - spreading from a use can reach beyond the circle; that use's later threads follow it (fire burns out where
+    it spread).
+  - icon: one emoji. At most 3 tools per plan. A tool and its effect can be the whole plan.
+  - keep a use small: a brush of radius 2-5, and per-second amounts like add_water 0.2-0.6 (a radius-4 brush is
+    about 50 tiles, so 0.5 a second is 25 m³ a second). A tool makes its own effect: {"raining": true} would
+    make a rain-cloud tool wait for the weather's rain instead of raining.
+  - to change a tool the player already has ("make my rain stronger"), make a new tool with
+    "replaces": "<its id or name>" (ids are in the skein list). It takes the old one's place in the palette; the
+    old tool's earlier uses keep going.
+You can't use tools yourself: if the player asks you to use one, make the change directly or tell them how.
+To turn an existing skein into a tool, read_skein it and put its threads in a tool.
 
 How the world works: water flows downhill, pools in low ground and leaves over the south edge. Fast water
 erodes soft ground and drops silt where it slows. It rains now and then. Nature (skein 1) is itself
@@ -84,8 +126,12 @@ Guidance:
 - Leave other skeins alone: only use switch_off when the player asks for something to stop.
 - Keep the world's variety: an edit that paints the whole map replaces every meadow, stone and sand tile.
   Prefer threads that act on the ground that is already there.
-- In "say", describe only what your plan actually does. Never promise something the plan doesn't contain
-  (an ending, regrowth, a later event); if the language can't do part of the whim, say so plainly.`;
+- In "say", describe only what your plan actually does. The game checks your say against the plan and refuses
+  the commit if they disagree: a height the ground ends at ("sinks to 6 m") needs a lowering thread with
+  {"height": [">", 6]} or a level edit; "for 30 seconds" or "stops after 30 seconds" needs {"within": 30} on
+  that thread; "after 10 seconds" (a later start) needs {"after": 10}; "every 30 seconds" needs a cycle; "stops",
+  "ends" or "burns out" needs within or a height limit; "regrows" or "later" needs after or cycle.
+  The player also sees a description generated from your plan next to your say, so a mismatch shows.`;
 
 const AreaParam = Type.Any({ description: 'An AREA: "spot", "everywhere", {"circle":[x,y,r]}, {"rect":[x,y,w,h]} or {"path":[[x,y],...],"width":2}' });
 const PlanParam = Type.Object({
@@ -95,7 +141,9 @@ const PlanParam = Type.Object({
   edits: Type.Optional(Type.Array(Type.Any())),
   threads: Type.Optional(Type.Array(Type.Any())),
   switch_off: Type.Optional(Type.Array(Type.Any())),
+  powers: Type.Optional(Type.Array(Type.Any())),
 });
+const UnsupportedParam = Type.Array(Type.String(), { description: 'What part of the whim can\'t be done, a few words each, e.g. ["double-click", "days"]. At most 3.' });
 
 export function localModel(config) {
   return {
@@ -154,23 +202,46 @@ export function lookAt(world, area, spot) {
   return lines.join("\n");
 }
 
-function planAreas(clean) {
-  return clean.edits.map((e) => e.area).concat(clean.threads.map((t) => t.area));
+/** Where the preview uses a tool: a circle at useAt, or for a drag tool a short stroke through it. */
+function trialUse(p, useAt) {
+  if (!p.brush.stroke) return { where: { x: useAt[0], y: useAt[1] }, area: { circle: [useAt[0], useAt[1], p.brush.circle] } };
+  const path = [[Math.max(0, useAt[0] - 4), useAt[1]], [Math.min(WF.W - 1, useAt[0] + 4), useAt[1]]];
+  return { where: { path }, area: { path, width: p.brush.stroke } };
 }
 
-/** Simulate the plan on a copy and compare with the same copy left alone. */
-export function preview(world, clean, spot, seconds = PREVIEW_SECONDS) {
+function planAreas(clean, useAt) {
+  return clean.edits.map((e) => e.area).concat(clean.threads.map((t) => t.area))
+    .concat((clean.powers || []).map((p) => trialUse(p, useAt).area));
+}
+
+function footStat(w, area) {
+  const { cells } = WF.areaShape(area);
+  let h = 0, wet = 0, water = 0;
+  for (const i of cells) { h += w.height[i]; water += w.water[i]; if (w.water[i] > WF.WET) wet++; }
+  return { h: h / Math.max(1, cells.length), wet, water, tiles: cells.length };
+}
+
+/**
+ * Simulate the plan on a copy and compare with the same copy left alone. Each tool in the plan is used once at
+ * useAt (default: the spot, or the map centre), so the model can see what a use does there.
+ */
+export function preview(world, clean, spot, seconds = PREVIEW_SECONDS, useAt = null) {
   const without = WF.load(WF.save(world)), withPlan = WF.load(WF.save(world));
   const baseCounts = new Map(withPlan.materials.map((m, k) => [k, 0]));
   for (let i = 0; i < WF.N; i++) baseCounts.set(withPlan.mat[i], (baseCounts.get(withPlan.mat[i]) || 0) + 1);
   const skein = WF.acceptPlan(withPlan, clean, { spot });
+  const at = useAt || (spot ? [spot.x, spot.y] : [Math.floor(WF.W / 2), Math.floor(WF.H / 2)]);
+  const uses = skein ? skein.powers.map((p) => {
+    const trial = trialUse(p, at), before = footStat(withPlan, trial.area);
+    return { p, trial, before, r: WF.usePower(withPlan, p.id, trial.where) };
+  }) : [];
   const fires = clean.threads.map(() => ({ total: 0, ticks: 0 }));
   for (let t = 0; t < seconds * WF.TPS; t++) {
     WF.step(without); WF.step(withPlan);
     if (skein) WF.threadActivity(withPlan, skein).forEach((f, k) => { fires[k].total += f; if (f > 0) fires[k].ticks++; });
   }
   const cells = new Set();
-  for (const a of planAreas(clean)) for (const i of WF.areaShape(a).cells) cells.add(i);
+  for (const a of planAreas(clean, at)) for (const i of WF.areaShape(a).cells) cells.add(i);
   const stat = (w) => {
     let water = 0, wet = 0, h = 0;
     for (const i of cells) { water += w.water[i]; if (w.water[i] > WF.WET) wet++; h += w.height[i]; }
@@ -196,6 +267,17 @@ export function preview(world, clean, spot, seconds = PREVIEW_SECONDS) {
       ? `Thread "${t.name}" never acted: its conditions never held on any tile.`
       : `Thread "${t.name}": its conditions held on ${fmt(f.total / Math.max(1, f.ticks), 0)} tiles at a time, during ${Math.round((100 * f.ticks) / ticks)}% of the time (actions with their own chance change fewer tiles than that).`);
   });
+  const states = WF.useStates(withPlan);
+  for (const { p, trial, before, r } of uses) {
+    if (!r.ok) { lines.push(`Tool "${p.name}" couldn't be used at (${at[0]},${at[1]}): ${r.message}`); continue; }
+    const after = footStat(withPlan, trial.area), st = states.get(r.use.id);
+    lines.push(`Used tool "${p.name}" once ${p.brush.stroke ? `as a drag from (${trial.area.path[0]}) to (${trial.area.path[1]}), width ${p.brush.stroke}` : `at (${at[0]},${at[1]}), radius ${p.brush.circle}`}: ` +
+      (p.edits.length ? `its edits changed ${r.changed} tiles; ` : "") +
+      `over ${seconds} s the ground there went ${fmt(before.h)} → ${fmt(after.h)} m on average, wet tiles ${before.wet} → ${after.wet} of ${after.tiles}, ` +
+      `water ${fmt(before.water)} → ${fmt(after.water)} m³. Now: ${st ? st.text : "done"}. That is one use at one place; elsewhere it may differ` +
+      (p.threads.length && !p.threads.some((t) => t.when.some((c) => "within" in c)) ? "; each use keeps acting until undone or switched off." : "."));
+  }
+  if (uses.length && !useAt && !spot) lines.push("No spot is selected, so tools were tried at the map centre; pass use_at: [x, y] to try one elsewhere.");
   const timed = (c) => "within" in c || "after" in c || (c.not && timed(c.not));
   if (clean.threads.length && !clean.threads.some((t) => t.when.some(timed))) {
     lines.push("None of these threads ever stops on its own: they run until the player switches them off. If the whim has an end, add a within condition.");
@@ -215,13 +297,65 @@ function checked(world, plan, spot) {
 
 /**
  * Run the shaper on a whim. world is a world object (a private copy is used), spot may be null.
- * onEvent receives {kind, ...} progress events. Returns {committed, plan, say, events, messages, seconds, toolCalls}.
+ * onEvent receives {kind, ...} progress events. Returns {outcome, committed, plan, unsupported, explain, say, events, messages, seconds, toolCalls}.
  */
 export async function shapeWhim({ world, spot, whim, model, onEvent = () => {}, signal }) {
   const copy = WF.load(WF.save(world));
   const events = [];
   const emit = (e) => { const ev = { at: Date.now(), ...e }; events.push(ev); onEvent(ev); };
-  let committed = null, toolCalls = 0, confirmedOff = "", lastTried = null, lastCall = "", repeats = 0;
+  let pushedBackDecline = false, pushedBackPropose = false, finished = null, toolCalls = 0, confirmedOff = "", lastTried = null, lastCall = "", repeats = 0;
+
+  // commit and propose share every check. The outcome is decided by routeOutcome from the player's request,
+  // the plan and the model's message, so a substitute is never committed as if it were the real thing.
+  const finishTool = (name, label, description) => ({
+    name, label, description,
+    parameters: name === "propose" ? Type.Object({ plan: PlanParam, unsupported: UnsupportedParam }) : Type.Object({ plan: PlanParam }),
+    execute: async (_id, p) => {
+      // Models sometimes drop name/say/unsupported between preview and commit; carry them over from the last preview.
+      const plan = { ...p.plan, unsupported: p.unsupported || (p.plan && p.plan.unsupported) };
+      if (lastTried && !plan.say) plan.say = lastTried.say;
+      if (lastTried && !plan.name) plan.name = lastTried.name;
+      if (lastTried && !plan.unsupported && lastTried.unsupported) plan.unsupported = lastTried.unsupported;
+      // A finish call with only name/say/unsupported means "that plan": reuse the last tried plan's contents.
+      const PARTS = ["materials", "edits", "threads", "switch_off"];
+      const empty = (v) => !v || (Array.isArray(v) && !v.length);
+      if (lastTried && PARTS.every((k) => empty(plan[k]))) for (const k of PARTS) if (!empty(lastTried.plan[k])) plan[k] = lastTried.plan[k];
+      const c = checked(copy, plan, spot);
+      const Nothing = name === "commit" ? "Nothing was committed" : "Nothing was proposed";
+      if (!c.usable) {
+        throw new Error(PARTS.every((k) => empty(plan[k]))
+          ? `${Nothing}: the plan has no materials, edits or threads. Put in the plan itself the edits and threads the player would get (try_plan first if you like).`
+          : c.head + `\n${Nothing}: none of the plan's parts could be used.`);
+      }
+      // say is optional: the player always sees "What it does", generated from the plan. When it's there, it's checked.
+      // The "can't do" list is shown too: its entries name missing abilities on purpose, but other claims in them
+      // (durations, heights) are checked like say.
+      const claims = checkClaims(c.clean.say, c.clean, CAPS, { proposing: name === "propose" })
+        .concat(checkClaims((plan.unsupported || []).map(String).join(". "), c.clean, CAPS, { namesMissing: true }));
+      if (claims.length) throw new Error(`${Nothing}: your say doesn't match the plan.\n- ` + claims.join("\n- "));
+      const route = routeOutcome({ whim, tool: name, unsupported: plan.unsupported, say: c.clean.say, caps: CAPS });
+      if (route.outcome === "proposed" && !route.unsupported.length) {
+        throw new Error("Nothing was proposed: list in unsupported what part of the whim can't be done, or commit if the whole whim is done.");
+      }
+      // A proposal is for abilities Glomus lacks. When neither the request nor the message names one, the "can't do"
+      // list is usually a description of the plan; ask once for a commit instead.
+      if (route.outcome === "proposed" && !pushedBackPropose && !requestNeeds(whim, CAPS).length && !admissions(c.clean.say).length) {
+        pushedBackPropose = true;
+        throw new Error(`Not proposed yet: nothing in the whim asks for something Glomus can't do, and unsupported (${route.unsupported.map((u) => JSON.stringify(u)).join(", ")}) should only name missing abilities like "double-click" or "days", never what you made. If the whole whim is done, call commit with this plan. If something really is missing, call propose again.`);
+      }
+      const offKey = c.clean.switch_off.slice().sort().join(",");
+      if (route.outcome === "committed" && offKey && offKey !== confirmedOff) {
+        confirmedOff = offKey;
+        const names = c.clean.switch_off.map((id) => `${id} (${(copy.skeins.find((k) => k.id === id) || {}).name || "?"})`).join(", ");
+        throw new Error(`Nothing was committed yet: this plan switches off skein ${names}. Did the player ask for that to stop? If so, commit the same plan again. If not, remove switch_off and commit.`);
+      }
+      finished = { outcome: route.outcome, clean: c.clean, problems: c.problems, say: c.clean.say, unsupported: route.unsupported };
+      emit({ kind: route.outcome, name: c.clean.name, problems: c.problems.length, unsupported: route.unsupported });
+      const tail = route.outcome === "committed" ? "Committed."
+        : `Recorded as a proposal for the player to approve (${route.reasons.join("; ") || "you proposed it"}). Can't do: ${route.unsupported.join("; ")}.`;
+      return { ...text(c.head + "\n" + tail), terminate: true };
+    },
+  });
   const started = Date.now();
 
   const tools = [
@@ -241,36 +375,38 @@ export async function shapeWhim({ world, spot, whim, model, onEvent = () => {}, 
     },
     {
       name: "try_plan", label: "Try plan", description: `Check a plan and simulate it for ${PREVIEW_SECONDS} seconds on a copy of the world. Nothing real changes.`,
-      parameters: Type.Object({ plan: PlanParam }),
+      parameters: Type.Object({ plan: PlanParam, use_at: Type.Optional(Type.Array(Type.Number(), { description: "Where to use the plan's tools once in the preview, [x, y]. Default: the spot." })) }),
       execute: async (_id, p) => {
         const c = checked(copy, p.plan, spot);
         if (!c.usable) throw new Error(c.head + "\nNothing in the plan could be used.");
-        lastTried = { name: c.clean.name, say: c.clean.say };
-        const pv = preview(copy, c.clean, spot);
+        lastTried = { name: c.clean.name, say: c.clean.say, unsupported: p.plan.unsupported, plan: p.plan };
+        const useAt = Array.isArray(p.use_at) && p.use_at.length >= 2 && p.use_at.every(Number.isFinite) ? p.use_at.slice(0, 2).map(Math.round) : null;
+        const pv = preview(copy, c.clean, spot, PREVIEW_SECONDS, useAt);
         emit({ kind: "tried", name: c.clean.name, summary: pv.text.split("\n").slice(1, 3).join(" "), problems: c.problems.length });
-        return text(c.head + "\n" + pv.text, { problems: c.problems, stats: pv.stats });
+        const claims = c.clean.say ? checkClaims(c.clean.say, c.clean, CAPS) : [];
+        const notes = [
+          "What the player will read about this plan (generated from it):\n- " + WF.explainPlan(c.clean, copy).join("\n- "),
+          claims.length ? "Your say claims things the plan doesn't do; committing it like this will be refused:\n- " + claims.join("\n- ") : "",
+        ].filter(Boolean).join("\n");
+        return text(c.head + "\n" + pv.text + "\n" + notes, { problems: c.problems, stats: pv.stats });
       },
     },
+    finishTool("commit", "Commit", "Apply the plan to the real world. This ends your turn."),
+    finishTool("propose", "Propose", "Offer a full plan (threads and edits included) as the closest thing to the whim, and list in unsupported, a few words each, what can't be done. The player approves it or not. This ends your turn."),
     {
-      name: "commit", label: "Commit", description: "Apply the plan to the real world. This ends your turn.",
-      parameters: Type.Object({ plan: PlanParam }),
+      name: "decline", label: "Decline", description: "Nothing reasonable fits the whim: tell the player why, in one or two sentences. This ends your turn.",
+      parameters: Type.Object({ say: Type.String() }),
       execute: async (_id, p) => {
-        // Models sometimes drop name/say between preview and commit; carry them over from the last preview.
-        const plan = { ...p.plan };
-        if (lastTried && !plan.say) plan.say = lastTried.say;
-        if (lastTried && !plan.name) plan.name = lastTried.name;
-        const c = checked(copy, plan, spot);
-        if (!c.usable) throw new Error(c.head + "\nNothing in the plan could be used, so nothing was committed.");
-        if (!c.clean.say) throw new Error('Nothing was committed: add "say", one or two sentences telling the player what the plan does.');
-        const offKey = c.clean.switch_off.slice().sort().join(",");
-        if (offKey && offKey !== confirmedOff) {
-          confirmedOff = offKey;
-          const names = c.clean.switch_off.map((id) => `${id} (${(copy.skeins.find((k) => k.id === id) || {}).name || "?"})`).join(", ");
-          throw new Error(`Nothing was committed yet: this plan switches off skein ${names}. Did the player ask for that to stop? If so, commit the same plan again. If not, remove switch_off and commit.`);
+        const say = String(p.say || "").trim().slice(0, 400);
+        if (!say) throw new Error("Say why, in one or two sentences.");
+        // A decline that describes something buildable makes the player ask again; propose it instead (asked once).
+        if (!pushedBackDecline && /\b(?:closest|instead|I can (?:make|give|do|build)|what I can do|could (?:make|give|build)|stand-in)\b/i.test(say)) {
+          pushedBackDecline = true;
+          throw new Error("Not declined yet: you described something you could make. Build it and call propose with it and unsupported, so the player can apply it with one click. If you really can't make it, call decline again.");
         }
-        committed = { clean: c.clean, problems: c.problems };
-        emit({ kind: "committed", name: c.clean.name, problems: c.problems.length });
-        return { ...text(c.head + "\nCommitted."), terminate: true };
+        finished = { outcome: "declined", clean: null, problems: [], say, unsupported: [] };
+        emit({ kind: "declined", say });
+        return { ...text("Declined."), terminate: true };
       },
     },
   ];
@@ -290,8 +426,8 @@ export async function shapeWhim({ world, spot, whim, model, onEvent = () => {}, 
         setTimeout(() => agent.abort(), 0);
         return { block: true, reason: "Stopped." };
       }
-      if (toolCalls > MAX_TOOL_CALLS && toolCall.name !== "commit") {
-        return { block: true, reason: `You have used all ${MAX_TOOL_CALLS} tool calls. Commit your best plan now, or stop.` };
+      if (toolCalls > MAX_TOOL_CALLS && !["commit", "propose", "decline"].includes(toolCall.name)) {
+        return { block: true, reason: `You have used all ${MAX_TOOL_CALLS} tool calls. Commit or propose your best plan now, or decline.` };
       }
       return undefined;
     },
@@ -300,7 +436,8 @@ export async function shapeWhim({ world, spot, whim, model, onEvent = () => {}, 
     if (e.type === "tool_execution_start") {
       const a = e.args || {};
       const label = e.toolName === "look" ? `looked at ${describeLoose(a.area)}` : e.toolName === "read_skein" ? `read skein ${a.id}`
-        : e.toolName === "try_plan" ? `tried "${(a.plan && a.plan.name) || "a plan"}"` : e.toolName === "commit" ? `committing "${(a.plan && a.plan.name) || "the plan"}"` : e.toolName;
+        : e.toolName === "try_plan" ? `tried "${(a.plan && a.plan.name) || "a plan"}"` : e.toolName === "commit" ? `committing "${(a.plan && a.plan.name) || "the plan"}"`
+        : e.toolName === "propose" ? `proposing "${(a.plan && a.plan.name) || "a plan"}"` : e.toolName === "decline" ? "declining" : e.toolName;
       emit({ kind: "tool", tool: e.toolName, label });
     }
     if (e.type === "tool_execution_end" && e.isError) {
@@ -326,9 +463,12 @@ export async function shapeWhim({ world, spot, whim, model, onEvent = () => {}, 
   const reply = lastText ? (lastText.content || []).filter((c) => c.type === "text").map((c) => c.text).join(" ").trim() : "";
   const error = agent.state.errorMessage || null;
   if (error) emit({ kind: "error", message: String(error).slice(0, 300) });
+  const outcome = finished ? finished.outcome : reply && !error ? "answered" : "failed";
+  const plan = finished ? finished.clean : null;
   return {
-    committed: !!committed, plan: committed ? committed.clean : null, problems: committed ? committed.problems : [],
-    say: committed ? committed.clean.say || reply : reply, error, events, messages: agent.state.messages,
+    outcome, committed: outcome === "committed", plan, problems: finished ? finished.problems : [],
+    unsupported: finished ? finished.unsupported : [], explain: plan ? WF.explainPlan(plan, copy) : [],
+    say: finished ? finished.say || reply : reply, error, events, messages: agent.state.messages,
     seconds: (Date.now() - started) / 1000, toolCalls,
   };
 }

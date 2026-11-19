@@ -31,6 +31,20 @@
   main { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 0; min-height: calc(100vh - 52px); }
   .mapcol { padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
   .mapwrap { position: relative; width: 100%; }
+  .palette { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; }
+  .palette .group { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .palette .glabel { font-size: 11px; text-transform: uppercase; letter-spacing: .7px; color: var(--muted); margin-right: 2px; }
+  .palette .tool { display: inline-flex; gap: 6px; align-items: center; padding: 4px 9px; }
+  .palette .tool.on { border-color: var(--accent); background: #1b3341; box-shadow: 0 0 0 1px var(--accent) inset; }
+  .palette .tool.disabled { opacity: .45; }
+  .palette .tool .key { font-size: 10px; color: var(--muted); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; }
+  .palette .tool .icon { font-size: 15px; line-height: 1; }
+  .palette .tool .badge { display: inline-grid; place-items: center; min-width: 20px; height: 18px; padding: 0 3px; border-radius: 4px; font-size: 10px; font-weight: 700; color: #0d1418; }
+  .palette .tool.glow { animation: glow 1.6s ease-out 3; }
+  @keyframes glow { 0% { box-shadow: 0 0 0 0 rgba(143,207,122,.9); } 100% { box-shadow: 0 0 0 10px rgba(143,207,122,0); } }
+  .palette .size { display: inline-flex; gap: 4px; align-items: center; color: var(--muted); font-size: 12px; }
+  .palette .size b { color: var(--text); min-width: 18px; text-align: center; font-variant-numeric: tabular-nums; }
+  .palette .hintline { color: var(--muted); font-size: 12px; font-style: italic; }
   canvas#map { display: block; width: 100%; height: auto; border-radius: 8px; cursor: crosshair; background: #000; touch-action: none; }
   .hover { color: var(--muted); font-size: 12px; min-height: 18px; font-variant-numeric: tabular-nums; }
   .timebar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
@@ -56,6 +70,13 @@
   .card .problems { font-size: 12px; color: var(--warn); margin: 4px 0 0; padding-left: 16px; }
   .card .buttons { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
   .card pre { font-size: 11px; max-height: 220px; overflow: auto; background: #111418; padding: 6px; border-radius: 4px; white-space: pre-wrap; }
+  .card .what { font-size: 12.5px; margin: 5px 0 0; padding-left: 16px; }
+  .card .what li + li { margin-top: 2px; }
+  .card .label { font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin-top: 6px; }
+  .card .says { font-size: 12.5px; color: var(--muted); font-style: italic; margin-top: 2px; }
+  .card .cant { font-size: 12.5px; color: var(--warn); margin-top: 4px; }
+  .card.proposal { border-color: #5c4a2c; }
+  .status-proposal { color: var(--warn); }
   .status-asking { color: var(--accent); }
   .status-fizzled { color: var(--bad); }
   details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
@@ -81,8 +102,17 @@
 </header>
 <main>
   <section class="mapcol">
-    <div class="mapwrap"><canvas id="map" width="960" height="640" aria-label="The world map. Click to choose a spot; drag to size it."></canvas></div>
-    <div id="hover" class="hover">Click the map to point at a spot; drag to size it. The model calls it "here".</div>
+    <div class="palette" id="palette">
+      <div class="group">
+        <span class="glabel">World</span>
+        <button id="toolSpot" class="tool on" title="Pick the spot a whim calls “here” (Esc)"><span class="icon">📍</span>Spot</button>
+        <span class="size" title="Size of the spot or of the tool you're using ([ and ])">Size <button id="sizeDown" class="small" aria-label="Smaller">◀</button><b id="sizeVal">4</b><button id="sizeUp" class="small" aria-label="Bigger">▶</button></span>
+        <button id="undoUse" class="small" disabled title="Take back what your last tool use did to the ground (Ctrl+Z). It doesn't replay the world: use Rewind to go back in time exactly.">↶ Undo use</button>
+      </div>
+      <div class="group" id="yourTools"></div>
+    </div>
+    <div class="mapwrap"><canvas id="map" width="960" height="640" aria-label="The world map. Click to pick a spot, or to use the tool you picked."></canvas></div>
+    <div id="hover" class="hover"></div>
     <div class="timebar">
       <span class="hint">Rewind</span>
       <input id="rewindRange" type="range" min="0" max="0" value="0" aria-label="How far back to rewind">
@@ -137,8 +167,9 @@ const EXAMPLES = [
   "Make the stones here sweat water",
   "A floodgate here that opens for 10 seconds every 30 seconds",
   "Let glowing moss creep along the river banks",
-  "Raise a little island in the lake",
-  "Pump water uphill from here to the north",
+  "🛠 A rain cloud tool: click to make it rain there for 10 seconds",
+  "🛠 A tool that raises a hill where I click",
+  "🛠 A tool that digs a channel where I drag",
 ];
 const SAMPLE_PLAN = {
   name: "Sweating stones",
@@ -155,6 +186,9 @@ let paused = false, speed = 1;
 let history = [];              // [{tick, snap}]
 const queue = [];              // whims being made
 let nextQueueId = 1, highlight = null, fizzles = [];
+let tool = "spot";             // "spot" or the id of one of the player's tools
+const sizes = { spot: 4 };     // each tool remembers its own size
+let hoverTile = null, flashes = [], useNote = null, useStateCache = new Map(), knownTools = null;
 
 function loadSaved() {
   try { const raw = localStorage.getItem(SAVE_KEY); return raw ? WF.load(JSON.parse(raw)) : null; } catch (e) { return null; }
@@ -243,9 +277,15 @@ function draw(now) {
   if (highlight) for (const area of highlight) strokeArea(area, "rgba(124,196,232,.9)", [4, 3]);
   // Whims being made: scaffolding where they will land.
   for (const q of queue) {
-    if (q.status === "done" || !q.spot) continue;
+    if (["done", "talked", "declined"].includes(q.status) || !q.spot) continue;
     const a = { circle: [q.spot.x, q.spot.y, q.spot.r] };
     if (q.status === "fizzled") { strokeArea(a, "rgba(232,128,106,.9)", [2, 4]); continue; }
+    if (q.status === "proposed") {
+      strokeArea(a, "rgba(232,184,106,.95)", [2, 3], 2);
+      ctx.fillStyle = "rgba(232,184,106,.95)"; ctx.font = "12px system-ui";
+      ctx.fillText("needs your OK", (q.spot.x + q.spot.r + 1.5) * scale, (q.spot.y + 0.8) * scale);
+      continue;
+    }
     ctx.save(); ctx.lineDashOffset = -now / 60; strokeArea(a, "rgba(232,184,106,.95)", [6, 5], 2.5); ctx.restore();
     ctx.fillStyle = "rgba(232,184,106,.95)"; ctx.font = "12px system-ui";
     ctx.fillText(q.status === "asking" ? `working… ${Math.floor((Date.now() - q.started) / 1000)}s` : "waiting", (q.spot.x + q.spot.r + 1.5) * scale, (q.spot.y + 0.8) * scale);
@@ -262,29 +302,143 @@ function draw(now) {
     ctx.restore();
   }
   if (spot) strokeArea({ circle: [spot.x, spot.y, spot.r] }, "rgba(255,255,255,.95)", [], 2);
+  // Where tool uses are still at work: brighter while acting, faint while holding, waiting or starting later.
+  for (const s of world.skeins) for (const p of s.powers || []) for (const u of p.uses) {
+    const st = (useStateCache.get(u.id) || {}).state;
+    if (!st || st === "done" || st === "expired") continue;
+    const acting = st === "acting", area = WF.useArea(u);
+    if (!area.path) strokeArea(area, "rgba(10,14,18,.45)", [], acting ? 4 : 3);
+    ctx.save(); ctx.lineDashOffset = acting ? -now / 120 : 0;
+    strokeArea(area, acting ? "rgba(170,235,150,.95)" : "rgba(200,225,190,.6)", acting ? [4, 4] : [2, 5], 2);
+    ctx.restore();
+  }
+  flashes = flashes.filter((f) => now - f.at < 700);
+  for (const f of flashes) {
+    const k = (now - f.at) / 700;
+    ctx.save(); ctx.globalAlpha = 1 - k;
+    strokeArea(f.area ? f.area : { circle: [f.x, f.y, f.r + k * 2] }, f.ok ? "rgba(143,207,122,1)" : "rgba(232,128,106,1)", [], 3);
+    ctx.restore();
+  }
+  const active = toolInfo(tool);
+  if (active && stroking) {
+    strokeArea({ path: stroking.points, width: sizes[tool] }, "rgba(170,225,250,1)", [], 2);
+  } else if (active && hoverTile) {
+    // A dark backing ring keeps the brush readable on sand, snow and water alike. A drag tool shows its width.
+    const r = active.power.brush.stroke ? sizes[tool] / 2 : sizes[tool];
+    strokeArea({ circle: [hoverTile[0], hoverTile[1], r] }, "rgba(10,14,18,.55)", [], 4);
+    ctx.save(); ctx.lineDashOffset = -now / 80;
+    strokeArea({ circle: [hoverTile[0], hoverTile[1], r] }, "rgba(170,225,250,1)", [5, 4], 2);
+    ctx.restore();
+  }
+  if (useNote && now - useNote.at < 5000) {
+    const st = useNote.useId ? useStateCache.get(useNote.useId) : null;
+    const text = useNote.message || (st && st.state !== "done" ? st.text : useNote.changed === 0 ? "nothing changed here" : `${useNote.once || "changed"} (${useNote.changed} tiles)`);
+    ctx.save(); ctx.font = "bold 12px system-ui"; ctx.globalAlpha = Math.min(1, (5000 - (now - useNote.at)) / 800);
+    const tx = Math.min((useNote.x + useNote.r + 1.2) * scale, W * scale - ctx.measureText(text).width - 6), ty = Math.max(14, (useNote.y + 0.8) * scale);
+    ctx.fillStyle = "rgba(13,20,24,.75)"; ctx.fillRect(tx - 4, ty - 12, ctx.measureText(text).width + 8, 17);
+    ctx.fillStyle = useNote.message ? "#e8806a" : "#cfe9c3"; ctx.fillText(text, tx, ty);
+    ctx.restore();
+  }
 }
 
-// ---------- spot picking ----------
+// ---------- the palette: Spot, size, undo, and the player's tools ----------
+const DEFAULT_HINT = "Click the map to pick a spot (size it with ◀ ▶ or [ ]). The model calls it \"here\".";
+function toolInfo(id) { if (id === "spot") return null; const f = WF.findPower(world, id); return f && !f.power.retired ? f : null; }
+function paletteTools() { const out = []; for (const s of world.skeins) for (const p of s.powers || []) if (!p.retired) out.push({ skein: s, power: p }); return out; }
+function initials(name) { const w = name.trim().split(/\s+/); return (w.length > 1 ? w[0][0] + w[1][0] : name.slice(0, 2)).toUpperCase(); }
+function badgeColor(name) { let h = 0; for (const c of name) h = (h * 31 + c.codePointAt(0)) % 360; return `hsl(${h} 55% 62%)`; }
+function selectTool(id) {
+  const info = toolInfo(id);
+  tool = info ? id : "spot";
+  if (info && sizes[tool] === undefined) sizes[tool] = info.power.brush.stroke || info.power.brush.circle;
+  renderPalette(); showHint();
+}
+function showHint() {
+  const info = toolInfo(tool);
+  $("hover").textContent = info ? `${info.power.icon || "🛠"} ${info.power.name}: ${info.power.brush.stroke ? `drag across the map to use it (${sizes[tool]} wide)` : `click the map to use it (radius ${sizes[tool]})`} · Esc goes back to Spot` : DEFAULT_HINT;
+}
+function renderPalette() {
+  const box = $("yourTools"), tools = paletteTools();
+  if (tool !== "spot" && !toolInfo(tool)) tool = "spot";
+  if (!knownTools) knownTools = new Set(tools.map((t) => t.power.id));
+  box.innerHTML = '<span class="glabel">Your tools</span>';
+  if (!tools.length) {
+    const h = document.createElement("span"); h.className = "hintline";
+    const removed = world.skeins.some((sk) => (sk.powers || []).some((p) => p.retired === "removed"));
+    h.textContent = removed ? "None in the palette. Removed tools can be put back from their cards." : "None yet. Ask for one: “a tool that raises a hill where I click”.";
+    box.appendChild(h);
+  }
+  tools.forEach(({ skein, power }, k) => {
+    const b = document.createElement("button");
+    b.className = "tool" + (tool === power.id ? " on" : "") + (skein.on ? "" : " disabled") + (knownTools.has(power.id) ? "" : " glow");
+    b.title = (skein.on ? `${power.name}: pick it, then ${power.brush.stroke ? "drag across" : "click"} the map.` : `${power.name} is switched off (skein #${skein.id}).`) + (k < 9 ? ` Key ${k + 1}.` : "");
+    if (k < 9) { const key = document.createElement("span"); key.className = "key"; key.textContent = k + 1; b.appendChild(key); }
+    if (power.icon) { const i = document.createElement("span"); i.className = "icon"; i.textContent = power.icon; b.appendChild(i); }
+    else { const i = document.createElement("span"); i.className = "badge"; i.style.background = badgeColor(power.name); i.textContent = initials(power.name); b.appendChild(i); }
+    b.appendChild(document.createTextNode(power.name + (power.brush.stroke ? " ⤳" : "")));
+    b.onclick = () => selectTool(tool === power.id ? "spot" : power.id);
+    knownTools.add(power.id);
+    box.appendChild(b);
+  });
+  $("toolSpot").classList.toggle("on", tool === "spot");
+  $("sizeVal").textContent = tool === "spot" ? sizes.spot : sizes[tool];
+  updateUndo();
+}
+function changeSize(d) {
+  const info = toolInfo(tool), max = tool === "spot" ? 30 : info && info.power.brush.stroke ? 8 : 12;
+  sizes[tool] = Math.max(1, Math.min(max, (tool === "spot" ? sizes.spot : sizes[tool]) + d));
+  if (tool === "spot" && spot) { spot.r = sizes.spot; showSpot(); }
+  $("sizeVal").textContent = sizes[tool]; showHint();
+}
+$("toolSpot").onclick = () => selectTool("spot");
+$("sizeDown").onclick = () => changeSize(-1);
+$("sizeUp").onclick = () => changeSize(1);
+function updateUndo() {
+  const last = WF.lastUse(world);
+  $("undoUse").disabled = !last;
+  $("undoUse").textContent = last ? `↶ Undo ${last.power.name}` : "↶ Undo use";
+}
+function undoLastUse() {
+  const last = WF.lastUse(world);
+  if (!last) return;
+  WF.undoUse(world, last.use.id);
+  useNote = { x: last.use.at[0], y: last.use.at[1], r: last.use.r, at: performance.now(), message: `took back a use of ${last.power.name}` };
+  useStateCache = WF.useStates(world); renderSkeins(); saveNow();
+}
+$("undoUse").onclick = undoLastUse;
+
 let dragging = null;
 function tileAt(ev) {
   const r = canvas.getBoundingClientRect();
   return [Math.max(0, Math.min(W - 1, Math.floor((ev.clientX - r.left) / scale))), Math.max(0, Math.min(H - 1, Math.floor((ev.clientY - r.top) / scale)))];
 }
+let stroking = null;          // a drag tool's points while the button is down
+function applyUse(info, where, x, y) {
+  const res = WF.usePower(world, tool, where), r = sizes[tool];
+  flashes.push({ x, y, r, area: res.ok ? WF.useArea(res.use) : null, at: performance.now(), ok: res.ok });
+  useNote = res.ok ? { useId: res.use.id, changed: res.changed, once: WF.powerOnceText(info.power), x, y, r: res.use.r, at: performance.now() } : { message: res.message, x, y, r, at: performance.now() };
+  if (res.ok) { useStateCache = WF.useStates(world); updateActivity(); updateUndo(); saveNow(); }
+}
 canvas.addEventListener("pointerdown", (ev) => {
-  const [x, y] = tileAt(ev);
-  dragging = { x, y }; spot = { x, y, r: 4 };
-  canvas.setPointerCapture(ev.pointerId); showSpot();
+  const [x, y] = tileAt(ev), info = toolInfo(tool);
+  if (!info) { spot = { x, y, r: sizes.spot }; showSpot(); return; }
+  if (info.power.brush.stroke) { stroking = { points: [[x, y]] }; canvas.setPointerCapture(ev.pointerId); return; }
+  applyUse(info, { x, y, r: sizes[tool] }, x, y);
 });
 canvas.addEventListener("pointermove", (ev) => {
-  const [x, y] = tileAt(ev), i = y * W + x;
-  $("hover").textContent = `(${x}, ${y}) · ground ${world.height[i].toFixed(1)} m · water ${world.water[i].toFixed(2)} m · ${world.materials[world.mat[i]].name}`;
-  if (dragging) {
-    const r = Math.hypot(x - dragging.x, y - dragging.y);
-    if (r >= 1) { spot.r = Math.min(30, Math.round(r)); showSpot(); }
-  }
+  const [x, y] = tileAt(ev), i = y * W + x, info = toolInfo(tool);
+  hoverTile = [x, y];
+  if (stroking) { const last = stroking.points[stroking.points.length - 1]; if (Math.hypot(x - last[0], y - last[1]) >= 1) stroking.points.push([x, y]); }
+  $("hover").textContent = (info ? `${info.power.icon || "🛠"} ${info.power.name} (${info.power.brush.stroke ? sizes[tool] + " wide" : "radius " + sizes[tool]}) · Esc for Spot · ` : "") +
+    `(${x}, ${y}) · ground ${world.height[i].toFixed(1)} m · water ${world.water[i].toFixed(2)} m · ${world.materials[world.mat[i]].name}`;
 });
-canvas.addEventListener("pointerup", () => { dragging = null; });
-canvas.addEventListener("pointerleave", () => { if (!dragging) $("hover").textContent = "Click the map to point at a spot; drag to size it. The model calls it \"here\"."; });
+canvas.addEventListener("pointerup", () => {
+  if (!stroking) return;
+  const info = toolInfo(tool), pts = stroking.points; stroking = null;
+  if (info) { const [x, y] = pts[pts.length - 1]; applyUse(info, { path: pts, w: sizes[tool] }, x, y); }
+});
+canvas.addEventListener("pointercancel", () => { stroking = null; });
+canvas.addEventListener("pointerleave", () => { hoverTile = null; showHint(); });
 function showSpot() {
   $("spotInfo").textContent = spot ? `Spot: (${spot.x}, ${spot.y}), radius ${spot.r}` : "No spot selected";
   $("clearSpot").hidden = !spot;
@@ -327,7 +481,8 @@ $("ask").onclick = ask;
 $("whim").addEventListener("keydown", (ev) => { if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); ask(); } });
 for (const ex of EXAMPLES) {
   const b = document.createElement("button"); b.className = "chip"; b.textContent = ex;
-  b.onclick = () => { $("whim").value = ex; $("whim").focus(); };
+  if (ex.startsWith("🛠")) b.title = "Makes a tool for your palette";
+  b.onclick = () => { $("whim").value = ex.replace(/^🛠\s*/, ""); $("whim").focus(); };
   $("chips").appendChild(b);
 }
 
@@ -338,7 +493,7 @@ async function pump() {
   q.status = "asking"; q.started = Date.now(); q.events = []; q.note = ""; renderQueue();
   let start;
   try {
-    start = await api("/api/whim", { whim: q.whim, spot: q.spot, world: WF.save(world) });
+    start = await api("/api/whim", { whim: q.whim, spot: q.spot, world: WF.saveForModel(world) });
   } catch (e) {
     start = { ok: false, message: serverMessage(e, "Couldn't reach the game server") };
   }
@@ -363,8 +518,11 @@ async function pump() {
       skein.problems = (r.problems || []).concat(checked.problems); skein.seconds = q.seconds; skein.toolCalls = r.toolCalls;
       queue.splice(queue.indexOf(q), 1); renderSkeins(); saveNow();
     } else fizzle(q, ["The world changed while the model worked, and the plan no longer fits:", ...checked.problems]);
+  } else if (job.status === "done" && r.outcome === "proposed" && r.plan) {
+    // The model made something close but not what was asked: the player approves the substitute first.
+    q.status = "proposed"; q.plan = r.plan; q.say = r.say; q.unsupported = r.unsupported || []; q.problems = r.problems || [];
   } else if (job.status === "done" && r.say && !r.error) {
-    q.status = "talked"; q.say = r.say;
+    q.status = r.outcome === "declined" ? "declined" : "talked"; q.say = r.say;
   } else {
     fizzle(q, [r.error || "The model stopped without committing a plan."]);
   }
@@ -382,6 +540,8 @@ const EVENT_TEXT = {
   tool_error: (e) => `${e.tool} failed: ${e.message.split(/\n/)[0]}`,
   said: (e) => `“${e.text}”`,
   committed: (e) => `committed "${e.name}"`,
+  proposed: (e) => `proposed "${e.name}" instead`,
+  declined: () => "declined",
   error: (e) => "error: " + e.message,
 };
 
@@ -390,17 +550,19 @@ function renderQueue() {
   box.innerHTML = "";
   if (!queue.length) { box.innerHTML = '<div class="empty">Nothing yet. Whims you ask for appear here, and on the map, while the model works.</div>'; return; }
   for (const q of queue) {
-    const el = document.createElement("div"); el.className = "card";
+    const el = document.createElement("div"); el.className = "card" + (q.status === "proposed" ? " proposal" : "");
     const where = q.spot ? `at (${q.spot.x}, ${q.spot.y})` : "no spot";
     const status = q.status === "asking" ? `<span class="status-asking">working ${Math.floor((Date.now() - q.started) / 1000)}s…</span>` :
-      q.status === "fizzled" ? `<span class="status-fizzled">fizzled</span>` : q.status === "talked" ? "answered" : "waiting";
+      q.status === "fizzled" ? `<span class="status-fizzled">fizzled</span>` : q.status === "proposed" ? `<span class="status-proposal">needs your OK</span>` :
+      q.status === "talked" ? "answered" : q.status === "declined" ? "can't do that" : "waiting";
     el.innerHTML = `<div class="top"><span class="name"></span><span class="id"></span></div><div class="act"></div>`;
     el.querySelector(".name").textContent = q.whim;
     el.querySelector(".id").innerHTML = status;
     el.querySelector(".act").textContent = where + (q.note ? " · " + q.note : "");
-    if (q.say) { const s = document.createElement("div"); s.className = "say"; s.textContent = q.say; el.appendChild(s); }
+    if (q.status === "proposed") renderProposal(el, q);
+    else if (q.say) { const s = document.createElement("div"); s.className = "say"; s.textContent = q.say; el.appendChild(s); }
     const steps = (q.events || []).filter((e) => EVENT_TEXT[e.kind] && !(e.kind === "tool" && e.tool === "try_plan"));
-    if (steps.length && q.status !== "talked") {
+    if (steps.length && !["talked", "declined", "proposed"].includes(q.status)) {
       const ul = document.createElement("ul"); ul.className = "log";
       for (const e of steps.slice(-5)) { const li = document.createElement("li"); li.textContent = EVENT_TEXT[e.kind](e); if (e.kind.includes("error")) li.className = "err"; ul.appendChild(li); }
       el.appendChild(ul);
@@ -410,7 +572,7 @@ function renderQueue() {
       for (const p of q.problems.slice(0, 6)) { const li = document.createElement("li"); li.textContent = p; ul.appendChild(li); }
       el.appendChild(ul);
     }
-    if (q.status === "fizzled" || q.status === "talked") {
+    if (q.status === "fizzled" || q.status === "talked" || q.status === "declined") {
       const b = document.createElement("div"); b.className = "buttons";
       if (q.status === "fizzled") { const again = document.createElement("button"); again.className = "small"; again.textContent = "Try again"; again.onclick = () => { q.status = "waiting"; q.problems = []; renderQueue(); pump(); }; b.appendChild(again); }
       const dismiss = document.createElement("button"); dismiss.className = "small"; dismiss.textContent = "Dismiss";
@@ -421,9 +583,50 @@ function renderQueue() {
   }
 }
 
+/** A plan's own description: what it does, generated from the plan, never from the model's message. */
+function whatItDoes(plan, max = 4) {
+  const lines = WF.explainPlan(plan, world), frag = document.createDocumentFragment();
+  const label = document.createElement("div"); label.className = "label"; label.textContent = "What it does"; frag.appendChild(label);
+  const list = (items) => { const ul = document.createElement("ul"); ul.className = "what"; for (const t of items) { const li = document.createElement("li"); li.textContent = t; ul.appendChild(li); } return ul; };
+  frag.appendChild(list(lines.slice(0, max)));
+  if (lines.length > max) {
+    const d = document.createElement("details"); d.innerHTML = `<summary>${lines.length - max} more</summary>`;
+    d.appendChild(list(lines.slice(max))); frag.appendChild(d);
+  }
+  return frag;
+}
+function modelSays(text) {
+  const frag = document.createDocumentFragment();
+  const label = document.createElement("div"); label.className = "label"; label.textContent = "The world says"; frag.appendChild(label);
+  const s = document.createElement("div"); s.className = "says"; s.textContent = "“" + text + "”"; frag.appendChild(s);
+  return frag;
+}
+
+function renderProposal(el, q) {
+  const cant = document.createElement("div"); cant.className = "cant";
+  cant.textContent = "Can't do: " + (q.unsupported.length ? q.unsupported.join("; ") : "part of this whim") + ". Here's the closest thing instead.";
+  el.appendChild(cant);
+  const checked = WF.checkPlan(world, q.plan, q.spot);
+  el.appendChild(whatItDoes(checked.clean, 6));
+  if (q.say) el.appendChild(modelSays(q.say));
+  const b = document.createElement("div"); b.className = "buttons";
+  const apply = document.createElement("button"); apply.className = "small primary"; apply.textContent = "Apply";
+  apply.onclick = () => {
+    const now = WF.checkPlan(world, q.plan, q.spot);
+    const skein = now.usable ? WF.acceptPlan(world, now.clean, { whim: q.whim, spot: q.spot }) : null;
+    if (!skein) { fizzle(q, ["The world changed since this was proposed, and it no longer fits:", ...now.problems]); renderQueue(); return; }
+    skein.problems = q.problems.concat(now.problems); skein.insteadOf = q.unsupported.slice();
+    queue.splice(queue.indexOf(q), 1); renderQueue(); renderSkeins(); saveNow();
+  };
+  const no = document.createElement("button"); no.className = "small"; no.textContent = "No thanks";
+  no.onclick = () => { queue.splice(queue.indexOf(q), 1); renderQueue(); };
+  b.append(apply, no); el.appendChild(b);
+}
+
 // ---------- skeins ----------
 function skeinAreas(l) {
-  const areas = l.threads.map((r) => r.area).concat(l.edits.map((e) => e.area));
+  const areas = l.threads.map((r) => r.area).concat(l.edits.map((e) => e.area))
+    .concat((l.powers || []).flatMap((p) => p.uses.map((u) => ({ circle: [u.at[0], u.at[1], u.r] }))));
   return areas.length ? areas : l.spot ? [{ circle: [l.spot.x, l.spot.y, l.spot.r] }] : [];
 }
 function renderSkeins() {
@@ -434,7 +637,12 @@ function renderSkeins() {
     el.innerHTML = `<div class="top"><span class="name"></span><span class="id">#${l.id}</span></div>`;
     el.querySelector(".name").textContent = l.name;
     if (l.whim) { const w = document.createElement("div"); w.className = "whim"; w.textContent = "“" + l.whim + "”"; el.appendChild(w); }
-    if (l.say) { const s = document.createElement("div"); s.className = "say"; s.textContent = l.say; el.appendChild(s); }
+    if (l.insteadOf && l.insteadOf.length) { const c = document.createElement("div"); c.className = "cant"; c.textContent = "Approved instead of: " + l.insteadOf.join("; "); el.appendChild(c); }
+    if (l.kind === "nature") {
+      const d = document.createElement("details"); d.innerHTML = "<summary>What it does</summary>";
+      d.appendChild(whatItDoes(l, 99)); d.querySelector(".label").remove(); el.appendChild(d);
+    } else el.appendChild(whatItDoes(l));
+    if (l.say) el.appendChild(l.kind === "nature" ? Object.assign(document.createElement("div"), { className: "say", textContent: l.say }) : modelSays(l.say));
     const act = document.createElement("div"); act.className = "act"; act.dataset.role = "activity"; el.appendChild(act);
     if (l.problems && l.problems.length) {
       const d = document.createElement("details"); d.innerHTML = `<summary>${l.problems.length} adjustment(s)</summary>`;
@@ -446,21 +654,31 @@ function renderSkeins() {
     const toggle = document.createElement("button"); toggle.className = "small"; toggle.textContent = l.on ? "Switch off" : "Switch on";
     toggle.onclick = () => { WF.setSkeinOn(world, l.id, !l.on); renderSkeins(); saveNow(); };
     b.appendChild(toggle);
+    for (const p of l.powers || []) {
+      if (p.retired === "replaced") continue;
+      const t = document.createElement("button"); t.className = "small";
+      t.textContent = p.retired ? `Put ${p.name} back` : `Remove ${p.name}`;
+      t.title = p.retired ? "Put this tool back in your palette" : "Take this tool off your palette. What it made, and its uses still at work, stay.";
+      t.onclick = () => { WF.setPowerRemoved(world, p.id, !p.retired); renderSkeins(); saveNow(); };
+      b.appendChild(t);
+    }
     if (l.kind !== "nature") {
       const erase = document.createElement("button"); erase.className = "small"; erase.textContent = "Erase";
-      erase.title = "Stop its threads and put back the ground its edits changed";
+      erase.title = "Stop its threads and tools, and take back what they did to the ground. It doesn't replay the world: use Rewind to go back in time exactly.";
       erase.onclick = () => { WF.eraseSkein(world, l.id); highlight = null; renderSkeins(); saveNow(); };
       b.appendChild(erase);
     }
     el.appendChild(b);
     const det = document.createElement("details"); det.innerHTML = "<summary>Show its plan</summary>";
     const pre = document.createElement("pre");
-    pre.textContent = JSON.stringify({ materials: l.materials, edits: l.edits, threads: l.threads, switch_off: l.switched }, null, 1);
+    pre.textContent = JSON.stringify({ materials: l.materials, edits: l.edits, threads: l.threads,
+      powers: (l.powers || []).map(({ uses, rec, ...p }) => ({ ...p, uses: uses.length })), switch_off: l.switched }, null, 1);
     det.appendChild(pre); el.appendChild(det);
     el.addEventListener("mouseenter", () => { highlight = skeinAreas(l); el.classList.add("hi"); });
     el.addEventListener("mouseleave", () => { highlight = null; el.classList.remove("hi"); });
     box.appendChild(el);
   }
+  renderPalette();
   updateActivity();
 }
 function updateActivity() {
@@ -470,7 +688,15 @@ function updateActivity() {
     const fires = WF.threadActivity(world, l), parts = [];
     l.threads.forEach((r, k) => parts.push(`${r.name}: ${fires[k]} tile${fires[k] === 1 ? "" : "s"}`));
     const edits = l.edits.length ? `${l.edits.length} edit${l.edits.length === 1 ? "" : "s"} to the ground. ` : "";
-    el.querySelector('[data-role="activity"]').textContent = edits + (parts.length ? "Acting now: " + parts.join(" · ") : "");
+    const tools = (l.powers || []).map((p) => {
+      const counts = {};
+      for (const u of p.uses) { const st = (useStateCache.get(u.id) || {}).state || "?"; counts[st] = (counts[st] || 0) + 1; }
+      const live = ["acting", "holding", "waiting", "pending", "idle", "starting", "off"].filter((k) => counts[k]).map((k) => `${counts[k]} ${k}`);
+      const where = p.retired === "replaced" ? " · replaced, off the palette" : p.retired ? " · off the palette" : "";
+      return `${p.icon || "🛠"} ${p.name}: used ${p.uses.length} time${p.uses.length === 1 ? "" : "s"}${live.length ? " (" + live.join(", ") + ")" : ""}${where}`;
+    });
+    el.querySelector('[data-role="activity"]').textContent = edits + (parts.length ? "Acting now: " + parts.join(" · ") + ". " : "") + tools.join(" · ") +
+      (l.recDropped ? " · Too old to take back its ground changes; Rewind still can." : "");
   }
 }
 
@@ -493,13 +719,17 @@ $("speed").onclick = () => { speed = speed === 1 ? 2 : speed === 2 ? 4 : speed =
 $("rain").onclick = () => { world.weather.raining = !world.weather.raining; world.weather.until = world.tick + (world.weather.raining ? 20 : 90) * TPS; };
 $("newworld").onclick = () => {
   if (!confirm("Start a new world? This one, its skeins and its rewind history will be gone.")) return;
-  world = WF.makeWorld((Math.random() * 2 ** 31) | 0); history = []; queue.length = 0; spot = null;
+  world = WF.makeWorld((Math.random() * 2 ** 31) | 0); history = []; queue.length = 0; spot = null; tool = "spot";
   showSpot(); renderQueue(); renderSkeins(); saveNow();
 };
 document.addEventListener("keydown", (ev) => {
   if (ev.target.closest("textarea, input")) return;
   if (ev.code === "Space") { ev.preventDefault(); $("pause").click(); }
-  if (ev.key === "Escape") { spot = null; showSpot(); }
+  if (ev.key === "Escape") { if (tool !== "spot") selectTool("spot"); else { spot = null; showSpot(); } }
+  if (/^[1-9]$/.test(ev.key) && !ev.ctrlKey && !ev.metaKey && !ev.altKey) { const t = paletteTools()[Number(ev.key) - 1]; if (t) selectTool(t.power.id); }
+  if (ev.key === "[") changeSize(-1);
+  if (ev.key === "]") changeSize(1);
+  if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "z") { ev.preventDefault(); undoLastUse(); }
 });
 const fmt = (ticks) => { const s = Math.max(0, Math.round(ticks / TPS)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); };
 function updateRewind() {
@@ -531,7 +761,7 @@ function frame(now) {
   }
   draw(now);
   if (now - lastUi > 500) {
-    lastUi = now; updateActivity(); updateRewind();
+    lastUi = now; useStateCache = WF.useStates(world); updateActivity(); updateRewind(); updateUndo();
     $("clock").textContent = fmt(world.tick) + " · " + (world.weather.raining ? "raining" : "clear");
     $("rain").textContent = world.weather.raining ? "Stop rain" : "Rain";
   }
@@ -539,7 +769,7 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 
-fit(); showSpot(); renderQueue(); renderSkeins(); checkModel();
+fit(); showSpot(); renderQueue(); useStateCache = WF.useStates(world); renderSkeins(); showHint(); checkModel();
 requestAnimationFrame(frame);
 window.addEventListener("beforeunload", saveNow);
 </script>

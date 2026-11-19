@@ -1,38 +1,508 @@
 {
-  "seed": 7,
-  "after_seconds": 30,
-  "cases": [
-    { "id": "stream-to-lake", "spot": { "x": 80, "y": 24, "r": 3 },
-      "whim": "Carve a stream from here down into the nearest lake",
-      "checks": [{ "type": "committed" }, { "type": "more_water", "area": { "circle": [80, 24, 5] }, "min": 5 },
-                 { "type": "more_wet_tiles", "min": 40 }] },
-    { "id": "sweating-stones", "spot": { "x": 45, "y": 3, "r": 3 },
-      "whim": "Make the stones here sweat water",
-      "checks": [{ "type": "committed" }, { "type": "thread_acts" }, { "type": "more_water", "area": { "circle": [45, 3, 8] }, "min": 2 }] },
-    { "id": "floodgate", "spot": { "x": 80, "y": 24, "r": 3 },
-      "whim": "A floodgate here that releases a burst of water for 10 seconds every 30 seconds",
-      "checks": [{ "type": "committed" }, { "type": "intermittent" }, { "type": "more_water", "area": { "circle": [80, 24, 6] }, "min": 2 }] },
-    { "id": "glowmoss", "spot": null,
-      "whim": "Let glowing moss creep along the river banks",
-      "checks": [{ "type": "committed" }, { "type": "new_material_grows", "min": 30 }] },
-    { "id": "island", "spot": { "x": 30, "y": 41, "r": 2 },
-      "whim": "Raise a little island in the middle of this lake",
-      "checks": [{ "type": "committed" }, { "type": "higher", "area": { "circle": [30, 41, 1] }, "min": 0.5 }] },
-    { "id": "pump-uphill", "spot": { "x": 22, "y": 30, "r": 2 },
-      "whim": "Pump water uphill from this river towards the north",
-      "checks": [{ "type": "committed" }, { "type": "uses", "action": "push_water" }, { "type": "thread_acts" }] },
-    { "id": "dry-lake", "spot": { "x": 30, "y": 41, "r": 4 },
-      "whim": "Dry up this lake",
-      "checks": [{ "type": "committed" }, { "type": "less_water", "area": { "circle": [30, 41, 4] }, "min": 5 }] },
-    { "id": "wildfire", "spot": null, "note": "From Jon's playtest: the model switched off his stream, painted the whole map, and promised an ending the plan didn't have.",
-      "whim": "Fire everywhere randomly for 2 days",
-      "checks": [{ "type": "committed" }, { "type": "no_switch_off" }, { "type": "uses_condition", "condition": "within" },
-                 { "type": "keeps", "material": "stone", "fraction": 0.5 }] },
-    { "id": "timed-fire", "spot": { "x": 50, "y": 24, "r": 6 }, "note": "From the demo recording: the model looped on commit without a say until the 4-minute timeout.",
-      "whim": "A wildfire that sweeps these hills for one minute, then burns out",
-      "checks": [{ "type": "committed" }, { "type": "uses_condition", "condition": "within" }, { "type": "no_switch_off" }] },
-    { "id": "question", "spot": null,
-      "whim": "Where is the highest point on the map?",
-      "checks": [{ "type": "not_committed" }, { "type": "says", "pattern": "56[^0-9]+0([^0-9]|$)" }] }
-  ]
+ "seed": 7,
+ "after_seconds": 30,
+ "cases": [
+  {
+   "id": "stream-to-lake",
+   "spot": {
+    "x": 80,
+    "y": 24,
+    "r": 3
+   },
+   "whim": "Carve a stream from here down into the nearest lake",
+   "checks": [
+    {
+     "type": "committed"
+    },
+    {
+     "type": "more_water",
+     "area": {
+      "circle": [
+       80,
+       24,
+       5
+      ]
+     },
+     "min": 5
+    },
+    {
+     "type": "more_wet_tiles",
+     "min": 40
+    }
+   ]
+  },
+  {
+   "id": "sweating-stones",
+   "spot": {
+    "x": 45,
+    "y": 3,
+    "r": 3
+   },
+   "whim": "Make the stones here sweat water",
+   "checks": [
+    {
+     "type": "committed"
+    },
+    {
+     "type": "thread_acts"
+    },
+    {
+     "type": "more_water",
+     "area": {
+      "circle": [
+       45,
+       3,
+       8
+      ]
+     },
+     "min": 2
+    }
+   ]
+  },
+  {
+   "id": "floodgate",
+   "spot": {
+    "x": 80,
+    "y": 24,
+    "r": 3
+   },
+   "whim": "A floodgate here that releases a burst of water for 10 seconds every 30 seconds",
+   "checks": [
+    {
+     "type": "committed"
+    },
+    {
+     "type": "intermittent"
+    },
+    {
+     "type": "more_water",
+     "area": {
+      "circle": [
+       80,
+       24,
+       6
+      ]
+     },
+     "min": 2
+    }
+   ]
+  },
+  {
+   "id": "glowmoss",
+   "spot": null,
+   "whim": "Let glowing moss creep along the river banks",
+   "checks": [
+    {
+     "type": "committed"
+    },
+    {
+     "type": "new_material_grows",
+     "min": 30
+    }
+   ]
+  },
+  {
+   "id": "island",
+   "spot": {
+    "x": 30,
+    "y": 41,
+    "r": 2
+   },
+   "whim": "Raise a little island in the middle of this lake",
+   "checks": [
+    {
+     "type": "committed"
+    },
+    {
+     "type": "higher",
+     "area": {
+      "circle": [
+       30,
+       41,
+       1
+      ]
+     },
+     "min": 0.5
+    }
+   ]
+  },
+  {
+   "id": "pump-uphill",
+   "spot": {
+    "x": 22,
+    "y": 30,
+    "r": 2
+   },
+   "whim": "Pump water uphill from this river towards the north",
+   "checks": [
+    {
+     "type": "committed"
+    },
+    {
+     "type": "uses",
+     "action": "push_water"
+    },
+    {
+     "type": "thread_acts"
+    }
+   ]
+  },
+  {
+   "id": "dry-lake",
+   "spot": {
+    "x": 30,
+    "y": 41,
+    "r": 4
+   },
+   "whim": "Dry up this lake",
+   "checks": [
+    {
+     "type": "committed"
+    },
+    {
+     "type": "less_water",
+     "area": {
+      "circle": [
+       30,
+       41,
+       4
+      ]
+     },
+     "min": 5
+    }
+   ]
+  },
+  {
+   "id": "wildfire",
+   "spot": null,
+   "note": "From Jon's playtest: the model switched off his stream, painted the whole map, and promised an ending the plan didn't have.",
+   "whim": "Fire everywhere randomly for 2 days",
+   "checks": [
+    {
+     "type": "outcome_in",
+     "outcomes": [
+      "proposed"
+     ]
+    },
+    {
+     "type": "unsupported_mentions",
+     "pattern": "day"
+    },
+    {
+     "type": "no_switch_off"
+    },
+    {
+     "type": "uses_condition",
+     "condition": "within"
+    },
+    {
+     "type": "keeps",
+     "material": "stone",
+     "fraction": 0.5
+    },
+    {
+     "type": "claims_check"
+    }
+   ]
+  },
+  {
+   "id": "timed-fire",
+   "spot": {
+    "x": 50,
+    "y": 24,
+    "r": 6
+   },
+   "note": "From the demo recording: the model looped on commit without a say until the 4-minute timeout.",
+   "whim": "A wildfire that sweeps these hills for one minute, then burns out",
+   "checks": [
+    {
+     "type": "committed"
+    },
+    {
+     "type": "uses_condition",
+     "condition": "within"
+    },
+    {
+     "type": "no_switch_off"
+    },
+    {
+     "type": "claims_check"
+    }
+   ]
+  },
+  {
+   "id": "double-click-sink",
+   "spot": {
+    "x": 35,
+    "y": 36,
+    "r": 4
+   },
+   "note": "Jon's playtest, word for word. The model claimed a double-click trigger and a stop at 6 m, and committed a thread that sank a fixed circle forever. Glomus has no double-click, so the honest outcome is a proposal that names it; with click tools, the closest thing is a tool. Its use is tried at three points: a shore where water can reach (44,36), a shore beside water lower than 6 m (60,39) where a fixed 'lower toward 6 m' tool does nothing, and a dry ridge (54,14).",
+   "whim": "Make it so when I left double-click, water replaces the land, by lowering the land or whatever mechanism for that area that works",
+   "checks": [
+    {
+     "type": "outcome_in",
+     "outcomes": [
+      "proposed"
+     ]
+    },
+    {
+     "type": "unsupported_mentions",
+     "pattern": "double"
+    },
+    {
+     "type": "claims_check"
+    },
+    {
+     "type": "has_power"
+    },
+    {
+     "type": "quiet_until_used",
+     "at": [
+      [
+       35,
+       36
+      ],
+      [
+       44,
+       36
+      ]
+     ]
+    },
+    {
+     "type": "power_use",
+     "control": [
+      70,
+      20
+     ],
+     "points": [
+      {
+       "at": [
+        44,
+        36
+       ],
+       "sinks": 0.3,
+       "wet": true
+      },
+      {
+       "at": [
+        60,
+        39
+       ],
+       "wet": true
+      },
+      {
+       "at": [
+        54,
+        14
+       ],
+       "sinks": 0.3,
+       "floor": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "key-binding",
+   "spot": {
+    "x": 48,
+    "y": 30,
+    "r": 4
+   },
+   "note": "A request for an input Glomus doesn't have: must be proposed or declined, never committed as a substitute.",
+   "whim": "When I press the R key, make it rain on the spot under my mouse",
+   "checks": [
+    {
+     "type": "outcome_in",
+     "outcomes": [
+      "proposed",
+      "declined"
+     ]
+    },
+    {
+     "type": "claims_check"
+    }
+   ]
+  },
+  {
+   "id": "rain-cloud-tool",
+   "spot": {
+    "x": 70,
+    "y": 30,
+    "r": 3
+   },
+   "note": "A plain tool request: nothing happens until it's used; a use rains there and the rain ends when planned.",
+   "whim": "A rain cloud tool: click to make it rain there for 10 seconds",
+   "checks": [
+    {
+     "type": "committed"
+    },
+    {
+     "type": "has_power"
+    },
+    {
+     "type": "quiet_until_used",
+     "at": [
+      [
+       70,
+       30
+      ],
+      [
+       44,
+       36
+      ]
+     ]
+    },
+    {
+     "type": "power_use",
+     "control": [
+      20,
+      50
+     ],
+     "seconds": 8,
+     "points": [
+      {
+       "at": [
+        54,
+        14
+       ],
+       "wet": true
+      }
+     ]
+    },
+    {
+     "type": "effect_ends",
+     "action": "add_water",
+     "at": [
+      54,
+      14
+     ]
+    },
+    {
+     "type": "claims_check"
+    }
+   ]
+  },
+  {
+   "id": "channel-tool",
+   "spot": null,
+   "note": "A drag tool: nothing happens until it's used; a drag across the hills digs along it, and only there.",
+   "whim": "A tool that digs a channel where I drag",
+   "checks": [
+    {
+     "type": "committed"
+    },
+    {
+     "type": "has_power",
+     "brush": "stroke"
+    },
+    {
+     "type": "quiet_until_used",
+     "at": [
+      [
+       50,
+       20
+      ],
+      [
+       44,
+       36
+      ]
+     ]
+    },
+    {
+     "type": "power_use",
+     "control": [
+      20,
+      50
+     ],
+     "seconds": 10,
+     "points": [
+      {
+       "path": [
+        [
+         40,
+         20
+        ],
+        [
+         52,
+         22
+        ],
+        [
+         60,
+         20
+        ]
+       ],
+       "sinks": 0.5
+      }
+     ]
+    },
+    {
+     "type": "claims_check"
+    }
+   ]
+  },
+  {
+   "id": "replace-tool",
+   "spot": null,
+   "note": "Changing a tool the player already has: the new tool should replace the old one in the palette, not add a second Rain cloud.",
+   "setup": {
+    "name": "Rain cloud",
+    "powers": [
+     {
+      "name": "Rain cloud",
+      "icon": "🌧️",
+      "brush": {
+       "circle": 3
+      },
+      "threads": [
+       {
+        "name": "rain",
+        "when": [
+         {
+          "within": 10
+         }
+        ],
+        "do": [
+         {
+          "add_water": 0.3
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   "whim": "Make my rain cloud tool rain twice as hard",
+   "checks": [
+    {
+     "type": "committed"
+    },
+    {
+     "type": "has_power"
+    },
+    {
+     "type": "replaces",
+     "id": "2.0"
+    },
+    {
+     "type": "claims_check"
+    }
+   ]
+  },
+  {
+   "id": "question",
+   "spot": null,
+   "whim": "Where is the highest point on the map?",
+   "checks": [
+    {
+     "type": "not_committed"
+    },
+    {
+     "type": "says",
+     "pattern": "56[^0-9]+0([^0-9]|$)"
+    }
+   ]
+  }
+ ]
 }

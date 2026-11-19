@@ -59,7 +59,7 @@ function saveCase(job, input, result) {
   fs.writeFileSync(path.join(dir, name), JSON.stringify({ id: job.id, whim: input.whim, spot: input.spot, model: config.alias,
     world: input.world, result: { ...result, messages: undefined }, messages: result.messages }, null, 1));
   fs.appendFileSync(path.join(WORKSPACE, "whims.jsonl"), JSON.stringify({ at: new Date().toISOString(), id: job.id, whim: input.whim,
-    committed: result.committed, toolCalls: result.toolCalls, seconds: result.seconds, error: result.error, file: name }) + "\n");
+    outcome: result.outcome, committed: result.committed, toolCalls: result.toolCalls, seconds: result.seconds, error: result.error, file: name }) + "\n");
 }
 
 async function startWhim(input) {
@@ -69,7 +69,8 @@ async function startWhim(input) {
   (async () => {
     try {
       const result = await shapeWhim({ world, spot: input.spot, whim: input.whim, model, onEvent: (e) => job.events.push(e) });
-      job.result = { committed: result.committed, plan: result.plan, problems: result.problems, say: result.say,
+      job.result = { outcome: result.outcome, committed: result.committed, plan: result.plan, problems: result.problems,
+        unsupported: result.unsupported, explain: result.explain, say: result.say,
         error: result.error, seconds: result.seconds, toolCalls: result.toolCalls };
       job.status = "done";
       saveCase(job, input, result);
