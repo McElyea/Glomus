@@ -83,6 +83,7 @@ const FUTURE = /\b(?:regrows?|regrowing|recovers?|after a while|later on|in a wh
 const INPUT_CLICK = /\b(?:click|clicks|clicking|tap|taps|tapping)\b(?!\s+["']?apply)/i;
 const INPUT_DRAG = /\b(?:drag|drags|dragging|swipe)\b/i;
 const INPUT_BAD = /\bdouble[- ]?(?:click|tap)|\bright[- ]?click|\bkey ?board\b|\b(?:[a-z0-9]|shift|ctrl|space|enter)\s+key\b|\bpress(?:es|ing)?\s+(?:the\s+)?["']?[a-z0-9]["']?(?![\w])|\bhover|\bscroll|\bmouse ?wheel/i;
+const WEATHER_QUALIFIED = /\b(?:when|while|whenever|during|if|once|only)\b[^.]{0,30}\b(?:rain|rains|raining|rainy|storm|storms|dry|weather)\b/i;
 // Nothing in a plan moves with the player: areas are fixed when the whim lands.
 const FOLLOWS = /\b(?:follows?|following|moves? with|tracks?|wherever)\b[^.]{0,40}\b(?:you|your|selection|selected|spot you pick|mouse|cursor|pointer)\b/i;
 const LONG_TIME = /\b(?:\d+|a|an|one|two|three|few|several)\s+(?:days?|hours?|weeks?|months?|years?)\b|\bovernight\b/i;
@@ -182,11 +183,19 @@ export function checkClaims(say, plan, caps = CAPS, { namesMissing = false, prop
     }
     // A thread that waits for the weather doesn't do what a clause says it does unconditionally: "click and it rains
     // there" with {"raining": true} only rains while it's already raining.
-    if (!namesMissing && scope.keys && !/\b(?:when|while|whenever|during|if|once)\b[^.]{0,20}\b(?:rain|rains|raining|storm|dry|weather)\b/i.test(clause)) {
-      const weather = scope.threads.find((x) => x.t.when.some((c) => "raining" in c || (c.not && "raining" in c.not)));
+    // A tool's or species' name isn't a claim ("a new Rain cloud replaces yours"), and a weather qualifier anywhere in
+    // the message counts ("It only acts when the weather is raining: your Rain cloud adds water…").
+    const named = (powers.map((p) => p.name).concat(((plan && plan.species) || []).map((sp) => sp.name)))
+      .reduce((t, n) => t.split(new RegExp(n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "ig")).join(" "), clause);
+    const weatherScope = matchEffects(named, fx);
+    if (!namesMissing && weatherScope.keys && !WEATHER_QUALIFIED.test(norm(say))) {
+      const weather = weatherScope.threads.find((x) => x.t.when.some((c) => "raining" in c || (c.not && "raining" in c.not)));
       if (weather) {
         const wet = weather.t.when.some((c) => c.raining === true || (c.not && c.not.raining === false));
-        fail(`"${weather.t.name}" acts whenever this happens`, `that thread has the condition {"raining": ${wet}}, so it only acts ${wet ? "while the weather is raining" : "while the weather is dry"}. Remove {"raining": ${wet}} from its "when" list, or say it only happens ${wet ? "when it rains" : "in dry weather"}`);
+        // Models tend to reword the message instead of fixing the plan, so hand them the corrected list to copy.
+        const fixed = weather.t.when.filter((c) => !("raining" in c) && !(c.not && "raining" in c.not));
+        fail(`"${weather.t.name}" acts whenever this happens`, `that thread has the condition {"raining": ${wet}}, so it only acts ${wet ? "while the weather is raining" : "while the weather is dry"}. ` +
+          `Rewording won't fix this: change the plan, giving thread "${weather.t.name}" "when": ${JSON.stringify(fixed)}. Or keep the condition and say it only happens ${wet ? "when it rains" : "in dry weather"}`);
       }
     }
     const follows = !namesMissing && clause.match(FOLLOWS);
@@ -235,8 +244,18 @@ export function checkClaims(say, plan, caps = CAPS, { namesMissing = false, prop
 }
 
 /** Clauses where the message admits it couldn't do part of the whim. */
+// An admission that the game lacks something has the game or the model as its subject ("I can't bind keys",
+// "Glomus has no double-click", "there's no way to…"). "The lizard can't climb" describes an animal, and "2 m instead
+// of 1 m" is a comparison: neither should turn a commit into a proposal.
+const ADMIT = new RegExp([
+  String.raw`\b(?:I|I'm|we|Glomus|the game|the world|this world)\b[^.;]{0,40}\b(?:can't|cannot|can not|couldn't|isn't able|am not able|unable|don't have|doesn't have|has no|have no|doesn't support|don't support|can only)\b`,
+  String.raw`\bthere(?:'s| is| are)\s+no\b(?:\s+\w+){0,3}\s+(?:in Glomus|in the game|here)\b`,
+  String.raw`\b(?:no way to|isn't possible|not possible|aren't possible|isn't supported|not supported|unsupported)\b`,
+].join("|"), "i");
+export const admits = (clause) => ADMIT.test(norm(clause));
+
 export function admissions(say) {
-  return clauses(say).filter(denies);
+  return clauses(say).filter(admits);
 }
 
 /**

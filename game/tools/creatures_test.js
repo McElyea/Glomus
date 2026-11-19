@@ -2,7 +2,7 @@
 // Run: npm run test:creatures. Once they pass, this file joins `npm test`.
 import assert from "node:assert";
 import * as WF from "../world.js";
-import { requestNeeds } from "../../server/claims.js";
+import { checkClaims, requestNeeds, routeOutcome } from "../../server/claims.js";
 
 const { W, H } = WF;
 let passed = 0, failed = 0;
@@ -270,6 +270,24 @@ test("the request check no longer refuses animals, but still refuses herds, flyi
   assert.ok(needs("a herd of deer that wanders the meadows").includes("herds and packs"));
   assert.ok(needs("a bird that flies over the lake").includes("flying"));
   assert.ok(needs("a dog that follows my mouse").includes("following the mouse pointer"));
+});
+
+test("what an animal can't do isn't an admission that Glomus can't do something (from the eval: a lizard 'can't climb')", () => {
+  const route = (say) => routeOutcome({ whim: "Add a little orange lizard that loves warm sand and hates water, here", tool: "commit", say }).outcome;
+  assert.strictEqual(route("A lizard named Cinder basks here. It avoids water, and it can't climb high steps."), "committed");
+  assert.strictEqual(route("Each click pours 2 m of water instead of 1 m, so it rains twice as hard."), "committed");
+  assert.strictEqual(route("I can't make it glow, so it is plain orange instead."), "proposed");
+  assert.strictEqual(route("Glomus has no way to make it sing; it just basks."), "proposed");
+  assert.strictEqual(route("There's no breeding in Glomus yet, so it stays one lizard."), "proposed");
+});
+
+test("the weather rule ignores tool names and reads qualifiers anywhere in the message (from the replace-tool eval)", () => {
+  const w = flat();
+  const plan = (when) => WF.checkPlan(w, { powers: [{ name: "Rain cloud", brush: 3, threads: [{ name: "downpour", when, do: [{ add_water: 0.5 }] }] }] }, null).clean;
+  assert.deepStrictEqual(checkClaims("A new Rain cloud replaces yours in the palette.", plan([{ raining: true }])), [], "a name isn't a claim");
+  assert.deepStrictEqual(checkClaims("It only acts when the weather is raining: your Rain cloud adds water where you click.", plan([{ raining: true }])), []);
+  const p = checkClaims("Your Rain cloud adds water where you click.", plan([{ raining: true }]));
+  assert.ok(p.some((m) => /"when": \[\]/.test(m)), "the refusal hands over the fixed when list: " + p.join("; "));
 });
 
 console.log(`\n${passed} passed, ${failed} failing`);
