@@ -31,9 +31,10 @@
   main { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 0; min-height: calc(100vh - 52px); }
   .mapcol { padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
   .mapwrap { position: relative; width: 100%; }
-  .palette { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; }
-  .palette .group { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-  .palette .glabel { font-size: 11px; text-transform: uppercase; letter-spacing: .7px; color: var(--muted); margin-right: 2px; }
+  .palette { display: flex; flex-direction: column; gap: 8px; }
+  .palette .group { display: flex; gap: 8px; align-items: flex-start; }
+  .palette .glabel { flex: 0 0 76px; padding-top: 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .7px; color: var(--muted); }
+  .palette .items { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; flex: 1; min-width: 0; }
   .palette .tool { display: inline-flex; gap: 6px; align-items: center; padding: 4px 9px; }
   .palette .tool.on { border-color: var(--accent); background: #1b3341; box-shadow: 0 0 0 1px var(--accent) inset; }
   .palette .tool.disabled { opacity: .45; }
@@ -78,6 +79,19 @@
   .card.proposal { border-color: #5c4a2c; }
   .status-proposal { color: var(--warn); }
   .status-asking { color: var(--accent); }
+  .animal { display: grid; grid-template-columns: 22px 1fr; gap: 2px 8px; align-items: center; }
+  .animal + .animal { margin-top: 8px; }
+  .animal canvas { width: 18px; height: 18px; }
+  .animal .who { font-weight: 600; }
+  .animal .who span { font-weight: 400; color: var(--muted); font-size: 12px; }
+  .animal .info { grid-column: 2; font-size: 12px; color: var(--muted); }
+  .animal.dead { opacity: .6; }
+  .bars { grid-column: 2; display: grid; grid-template-columns: 54px 1fr; gap: 2px 6px; align-items: center; font-size: 11px; color: var(--muted); }
+  .bar { height: 6px; border-radius: 3px; background: #2b3139; overflow: hidden; }
+  .bar i { display: block; height: 100%; border-radius: 3px; }
+  .legend { display: grid; grid-template-columns: 18px 1fr auto; gap: 4px 8px; align-items: center; font-size: 12px; margin-top: 6px; }
+  .legend .sw { width: 14px; height: 14px; border-radius: 3px; border: 1px solid #0006; }
+  .legend .n { color: var(--muted); font-variant-numeric: tabular-nums; }
   .status-fizzled { color: var(--bad); }
   details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
   .empty { color: var(--muted); font-size: 12px; }
@@ -102,15 +116,6 @@
 </header>
 <main>
   <section class="mapcol">
-    <div class="palette" id="palette">
-      <div class="group">
-        <span class="glabel">World</span>
-        <button id="toolSpot" class="tool on" title="Pick the spot a whim calls “here” (Esc)"><span class="icon">📍</span>Spot</button>
-        <span class="size" title="Size of the spot or of the tool you're using ([ and ])">Size <button id="sizeDown" class="small" aria-label="Smaller">◀</button><b id="sizeVal">4</b><button id="sizeUp" class="small" aria-label="Bigger">▶</button></span>
-        <button id="undoUse" class="small" disabled title="Take back what your last tool use did to the ground (Ctrl+Z). It doesn't replay the world: use Rewind to go back in time exactly.">↶ Undo use</button>
-      </div>
-      <div class="group" id="yourTools"></div>
-    </div>
     <div class="mapwrap"><canvas id="map" width="960" height="640" aria-label="The world map. Click to pick a spot, or to use the tool you picked."></canvas></div>
     <div id="hover" class="hover"></div>
     <div class="timebar">
@@ -121,6 +126,20 @@
     </div>
   </section>
   <aside>
+    <section>
+      <h2>Tools</h2>
+      <div class="palette" id="palette">
+        <div class="group">
+          <span class="glabel">World</span>
+          <span class="items">
+          <button id="toolSpot" class="tool on" title="Pick the spot a whim calls “here” (Esc)"><span class="icon">📍</span>Spot</button>
+          <span class="size" title="Size of the spot or of the tool you're using ([ and ])">Size <button id="sizeDown" class="small" aria-label="Smaller">◀</button><b id="sizeVal">4</b><button id="sizeUp" class="small" aria-label="Bigger">▶</button></span>
+          <button id="undoUse" class="small" disabled title="Take back what your last tool use did to the ground (Ctrl+Z). It doesn't replay the world: use Rewind to go back in time exactly.">↶ Undo use</button>
+          </span>
+        </div>
+        <div class="group" id="yourTools"></div>
+      </div>
+    </section>
     <section>
       <h2>Make a whim</h2>
       <textarea id="whim" rows="3" placeholder="Tell the world what you want. Carve a stream from the spring into the lake… make the stones here sweat water… a floodgate that opens every 30 seconds…"></textarea>
@@ -134,6 +153,11 @@
     <section>
       <h2>Being made</h2>
       <div id="queue"><div class="empty">Nothing yet. Whims you ask for appear here, and on the map, while the model works.</div></div>
+    </section>
+    <section>
+      <h2>Animals</h2>
+      <div id="animals"></div>
+      <details id="legendBox" style="margin-top:8px"><summary>Legend: ground and animals</summary><div id="legend" class="legend"></div></details>
     </section>
     <section>
       <h2>Skeins</h2>
@@ -312,6 +336,27 @@ function draw(now) {
     strokeArea(area, acting ? "rgba(170,235,150,.95)" : "rgba(200,225,190,.6)", acting ? [4, 4] : [2, 5], 2);
     ctx.restore();
   }
+  // Animals: a glyph in their species' colour and pattern, outlined so they read on any ground; the dead as a faded ×.
+  for (const c of world.creatures || []) {
+    const sp = WF.speciesOf(world, c.species);
+    if (!sp) continue;
+    const px = c.x * scale, py = c.y * scale, r = Math.max(5, scale * 0.8);
+    if (c.dead) {
+      ctx.save(); ctx.globalAlpha = 0.6; ctx.strokeStyle = "#e8806a"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(px - r, py - r); ctx.lineTo(px + r, py + r); ctx.moveTo(px + r, py - r); ctx.lineTo(px - r, py + r); ctx.stroke(); ctx.restore();
+      continue;
+    }
+    drawGlyph(ctx, px, py, r, sp.look);
+    if (hoverAnimal === c.id) {
+      ctx.save(); ctx.strokeStyle = "rgba(255,255,255,.9)"; ctx.lineWidth = 2; ctx.setLineDash([3, 3]);
+      ctx.beginPath(); ctx.arc(px, py, r * 2.2, 0, Math.PI * 2); ctx.stroke(); ctx.restore();
+      // Its two needs as small bars above it.
+      const w = r * 3, x0 = px - w / 2, y0 = py - r - 10;
+      ctx.fillStyle = "rgba(10,14,18,.75)"; ctx.fillRect(x0 - 2, y0 - 2, w + 4, 11);
+      ctx.fillStyle = "#7cc4e8"; ctx.fillRect(x0, y0, w * c.thirst, 3);
+      ctx.fillStyle = "#8fcf7a"; ctx.fillRect(x0, y0 + 5, w * c.hunger, 3);
+    }
+  }
   flashes = flashes.filter((f) => now - f.at < 700);
   for (const f of flashes) {
     const k = (now - f.at) / 700;
@@ -341,6 +386,97 @@ function draw(now) {
   }
 }
 
+// ---------- animals ----------
+let hoverAnimal = null;
+/** An animal's glyph: its colour in one of five patterns, with a dark outline. */
+function drawGlyph(g, px, py, r, look) {
+  g.save(); g.lineWidth = Math.max(1.5, r * 0.28); g.strokeStyle = "rgba(10,14,18,.9)"; g.fillStyle = look.color;
+  const shape = () => {
+    g.beginPath();
+    if (look.pattern === "diamond") { g.moveTo(px, py - r); g.lineTo(px + r, py); g.lineTo(px, py + r); g.lineTo(px - r, py); g.closePath(); }
+    else g.arc(px, py, r, 0, Math.PI * 2);
+  };
+  if (look.pattern === "cross") {
+    const t = r * 0.42;
+    g.beginPath(); g.rect(px - t, py - r, 2 * t, 2 * r); g.rect(px - r, py - t, 2 * r, 2 * t);
+    g.stroke(); g.fill();
+  } else if (look.pattern === "ring") {
+    shape(); g.stroke(); g.lineWidth = r * 0.5; g.strokeStyle = look.color; g.beginPath(); g.arc(px, py, r * 0.7, 0, Math.PI * 2); g.stroke();
+  } else {
+    shape(); g.stroke(); g.fill();
+    if (look.pattern === "stripe") { g.strokeStyle = "rgba(10,14,18,.8)"; g.lineWidth = r * 0.3; g.beginPath(); g.moveTo(px - r * 0.8, py + r * 0.45); g.lineTo(px + r * 0.8, py - r * 0.45); g.stroke(); }
+  }
+  g.restore();
+}
+function glyphCanvas(look) {
+  const cv = document.createElement("canvas"); cv.width = 36; cv.height = 36;
+  drawGlyph(cv.getContext("2d"), 18, 18, 12, look); return cv;
+}
+const clock = (s) => Math.floor(s / 60) + ":" + String(Math.floor(s % 60)).padStart(2, "0");
+function animalAt(x, y) {
+  let best = null, bestD = 2;
+  for (const c of world.creatures || []) { const d = Math.hypot(c.x - (x + 0.5), c.y - (y + 0.5)); if (d < bestD) { best = c; bestD = d; } }
+  return best;
+}
+/** The Animals panel: each animal's needs, what it's doing and both scores; the dead and the recently gone too. */
+function renderAnimals() {
+  const box = $("animals"), lives = WF.lifeStats(world);
+  box.innerHTML = "";
+  if (!lives.length) { box.innerHTML = '<div class="empty">No animals. Ask for one: “a little orange lizard that loves warm sand”.</div>'; }
+  for (const life of lives) {
+    const c = (world.creatures || []).find((k) => k.id === life.id), sp = WF.speciesOf(world, life.species);
+    const el = document.createElement("div"); el.className = "animal" + (life.alive ? "" : " dead");
+    // Hovering its row finds it on the map: a ring and its need bars.
+    el.addEventListener("mouseenter", () => { hoverAnimal = life.id; });
+    el.addEventListener("mouseleave", () => { if (hoverAnimal === life.id) hoverAnimal = null; });
+    el.appendChild(sp ? glyphCanvas(sp.look) : document.createElement("span"));
+    const who = document.createElement("div"); who.className = "who"; who.textContent = life.name + " ";
+    const kind = document.createElement("span"); kind.textContent = `${life.name.toLowerCase().startsWith(life.species) ? "" : life.species + " · "}${life.alive ? life.state : "died of " + life.diedOf}`; who.appendChild(kind);
+    el.appendChild(who);
+    if (life.alive && c) {
+      const bars = document.createElement("div"); bars.className = "bars";
+      for (const [label, v, color] of [["water", c.thirst, "#7cc4e8"], ["food", c.hunger, "#8fcf7a"]]) {
+        const l = document.createElement("span"); l.textContent = label; bars.appendChild(l);
+        const b = document.createElement("div"); b.className = "bar"; b.innerHTML = `<i style="width:${Math.round(v * 100)}%;background:${color}"></i>`; bars.appendChild(b);
+      }
+      el.appendChild(bars);
+    }
+    const share = life.ageSeconds > 0 ? Math.round((100 * life.thrivingSeconds) / life.ageSeconds) : 100;
+    const perWhim = Math.round(life.thrivingSeconds / (1 + life.whimsSince));
+    const info = document.createElement("div"); info.className = "info";
+    info.textContent = `${life.alive ? "alive" : "lived"} ${clock(life.ageSeconds)} · thriving ${share}% · ${life.whimsSince} whim${life.whimsSince === 1 ? "" : "s"} since it arrived · ${perWhim} s thriving per whim`;
+    info.title = "Two ways to play: keep it thriving as much as you can (thriving %), or with as few whims as you can (seconds thriving per whim).";
+    el.appendChild(info);
+    box.appendChild(el);
+  }
+  const grazersAlive = (world.creatures || []).some((k) => k.species === "grazer" && !k.dead);
+  if (!grazersAlive && lives.some((l) => l.species === "grazer")) {
+    const b = document.createElement("button"); b.className = "small"; b.style.marginTop = "8px"; b.textContent = "Release another grazer";
+    b.onclick = () => {
+      const n = lives.filter((l) => l.species === "grazer").length;
+      if (!WF.releaseGrazer(world, n === 1 ? "Mossback II" : `Mossback ${["I", "II", "III", "IV", "V", "VI", "VII", "VIII"][n] || n + 1}`)) b.textContent = "Nowhere near water to release it";
+      renderAnimals(); saveNow();
+    };
+    box.appendChild(b);
+  }
+  if ($("legendBox").open) renderLegend();
+}
+function renderLegend() {
+  const box = $("legend"); box.innerHTML = "";
+  const counts = new Map(); for (let i = 0; i < W * H; i++) counts.set(world.mat[i], (counts.get(world.mat[i]) || 0) + 1);
+  let wet = 0; for (let i = 0; i < W * H; i++) if (world.water[i] > WET) wet++;
+  const row = (swatch, name, n) => { box.appendChild(swatch); const t = document.createElement("span"); t.textContent = name; box.appendChild(t); const c = document.createElement("span"); c.className = "n"; c.textContent = n; box.appendChild(c); };
+  const sw = (color) => { const d = document.createElement("span"); d.className = "sw"; d.style.background = color; return d; };
+  row(sw("#2a5a96"), "water", `${wet} tiles`);
+  world.materials.forEach((m, k) => { if (counts.get(k)) row(sw(m.color), m.name, `${counts.get(k)} tiles`); });
+  for (const sp of world.species || []) {
+    const n = (world.creatures || []).filter((c) => c.species === sp.name && !c.dead).length;
+    const g = glyphCanvas(sp.look); g.style.width = "16px"; g.style.height = "16px";
+    row(g, `${sp.name} (eats ${sp.eats.join("/")})`, `${n} alive`);
+  }
+}
+$("legendBox").addEventListener("toggle", () => { if ($("legendBox").open) renderLegend(); });
+
 // ---------- the palette: Spot, size, undo, and the player's tools ----------
 const DEFAULT_HINT = "Click the map to pick a spot (size it with ◀ ▶ or [ ]). The model calls it \"here\".";
 function toolInfo(id) { if (id === "spot") return null; const f = WF.findPower(world, id); return f && !f.power.retired ? f : null; }
@@ -361,12 +497,13 @@ function renderPalette() {
   const box = $("yourTools"), tools = paletteTools();
   if (tool !== "spot" && !toolInfo(tool)) tool = "spot";
   if (!knownTools) knownTools = new Set(tools.map((t) => t.power.id));
-  box.innerHTML = '<span class="glabel">Your tools</span>';
+  box.innerHTML = '<span class="glabel">Your tools</span><span class="items"></span>';
+  const items = box.querySelector(".items");
   if (!tools.length) {
     const h = document.createElement("span"); h.className = "hintline";
     const removed = world.skeins.some((sk) => (sk.powers || []).some((p) => p.retired === "removed"));
     h.textContent = removed ? "None in the palette. Removed tools can be put back from their cards." : "None yet. Ask for one: “a tool that raises a hill where I click”.";
-    box.appendChild(h);
+    items.appendChild(h);
   }
   tools.forEach(({ skein, power }, k) => {
     const b = document.createElement("button");
@@ -378,7 +515,7 @@ function renderPalette() {
     b.appendChild(document.createTextNode(power.name + (power.brush.stroke ? " ⤳" : "")));
     b.onclick = () => selectTool(tool === power.id ? "spot" : power.id);
     knownTools.add(power.id);
-    box.appendChild(b);
+    items.appendChild(b);
   });
   $("toolSpot").classList.toggle("on", tool === "spot");
   $("sizeVal").textContent = tool === "spot" ? sizes.spot : sizes[tool];
@@ -428,6 +565,14 @@ canvas.addEventListener("pointerdown", (ev) => {
 canvas.addEventListener("pointermove", (ev) => {
   const [x, y] = tileAt(ev), i = y * W + x, info = toolInfo(tool);
   hoverTile = [x, y];
+  const pet = animalAt(x, y);
+  hoverAnimal = pet ? pet.id : null;
+  if (pet && !stroking) {
+    const life = WF.lifeStats(world).find((l) => l.id === pet.id);
+    $("hover").textContent = pet.dead ? `${pet.name} (${pet.species}) died of ${pet.diedOf} here` :
+      `🐾 ${pet.name} (${pet.species}) · water ${Math.round(pet.thirst * 100)}% · food ${Math.round(pet.hunger * 100)}% · ${pet.state} · alive ${clock(life.ageSeconds)}`;
+    return;
+  }
   if (stroking) { const last = stroking.points[stroking.points.length - 1]; if (Math.hypot(x - last[0], y - last[1]) >= 1) stroking.points.push([x, y]); }
   $("hover").textContent = (info ? `${info.power.icon || "🛠"} ${info.power.name} (${info.power.brush.stroke ? sizes[tool] + " wide" : "radius " + sizes[tool]}) · Esc for Spot · ` : "") +
     `(${x}, ${y}) · ground ${world.height[i].toFixed(1)} m · water ${world.water[i].toFixed(2)} m · ${world.materials[world.mat[i]].name}`;
@@ -438,7 +583,7 @@ canvas.addEventListener("pointerup", () => {
   if (info) { const [x, y] = pts[pts.length - 1]; applyUse(info, { path: pts, w: sizes[tool] }, x, y); }
 });
 canvas.addEventListener("pointercancel", () => { stroking = null; });
-canvas.addEventListener("pointerleave", () => { hoverTile = null; showHint(); });
+canvas.addEventListener("pointerleave", () => { hoverTile = null; hoverAnimal = null; showHint(); });
 function showSpot() {
   $("spotInfo").textContent = spot ? `Spot: (${spot.x}, ${spot.y}), radius ${spot.r}` : "No spot selected";
   $("clearSpot").hidden = !spot;
@@ -761,7 +906,7 @@ function frame(now) {
   }
   draw(now);
   if (now - lastUi > 500) {
-    lastUi = now; useStateCache = WF.useStates(world); updateActivity(); updateRewind(); updateUndo();
+    lastUi = now; useStateCache = WF.useStates(world); updateActivity(); updateRewind(); updateUndo(); renderAnimals();
     $("clock").textContent = fmt(world.tick) + " · " + (world.weather.raining ? "raining" : "clear");
     $("rain").textContent = world.weather.raining ? "Stop rain" : "Rain";
   }
@@ -769,7 +914,7 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 
-fit(); showSpot(); renderQueue(); useStateCache = WF.useStates(world); renderSkeins(); showHint(); checkModel();
+fit(); showSpot(); renderQueue(); useStateCache = WF.useStates(world); renderSkeins(); renderAnimals(); showHint(); checkModel();
 requestAnimationFrame(frame);
 window.addEventListener("beforeunload", saveNow);
 </script>

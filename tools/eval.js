@@ -163,6 +163,26 @@ function judge(check, ctx) {
       const st = WF.useStates(A).get(use.id);
       return [!["acting", "pending", "waiting"].includes(st.state), `after ${Math.max(...ends) + 5} s: ${st.text}`];
     }
+    // An animal after the case's seconds: alive, and at least this watered and fed. Compared with no plan.
+    case "animal": {
+      const show = (w) => { const a = w.creatures.find((k) => k.name === check.name); return !a ? "gone" : a.dead ? `died of ${a.diedOf}` : `thirst ${Math.round(a.thirst * 100)}%, ${a.state}`; };
+      const a = withPlan.creatures.find((k) => k.name === check.name);
+      const ok = !!a && !a.dead && a.thirst >= (check.min_thirst ?? 0) && a.hunger >= (check.min_hunger ?? 0);
+      return [ok, `${check.name}: ${show(withPlan)}; without the plan: ${show(without)}`];
+    }
+    case "species_defined": {
+      const n = plan ? (plan.species || []).length : 0;
+      return [n > 0, n ? "species: " + plan.species.map((sp) => `${sp.name} (eats ${sp.eats.join("/")}, wades ${sp.wades} m)`).join(", ") : "no species"];
+    }
+    // Animals of the plan's new species are still alive after `seconds` more.
+    case "animals_survive": {
+      if (!plan || !(plan.species || []).length) return [false, "no species"];
+      const names = new Set(plan.species.map((sp) => sp.name)), w = WF.load(WF.save(withPlan));
+      const count = () => w.creatures.filter((k) => names.has(k.species) && !k.dead).length, start = count();
+      for (let t = 0; t < (check.seconds || 90) * WF.TPS; t++) WF.step(w);
+      const dead = w.creatures.filter((k) => names.has(k.species) && k.dead).map((k) => `${k.name}: ${k.diedOf}`);
+      return [start > 0 && count() > 0, `${start} released and alive at ${suite.after_seconds || 30} s, ${count()} alive ${check.seconds || 90} s later${dead.length ? " (" + dead.join(", ") + ")" : ""}`];
+    }
     case "uses": {
       const used = !!plan && plan.threads.some((t) => t.do.some((a) => check.action in a));
       return [used, used ? `uses ${check.action}` : `no ${check.action}`];
@@ -178,7 +198,18 @@ for (const c of suite.cases) {
     process.stdout.write(`${c.id}${repeat > 1 ? " #" + (k + 1) : ""} … `);
     // A case can start with something already made (a tool in the palette), written as a plan.
     caseBase = base;
-    if (c.setup) { const w = WF.load(base); WF.acceptPlan(w, WF.checkPlan(w, c.setup, c.spot).clean, { spot: c.spot }); caseBase = WF.save(w); }
+    if (c.setup || c.animals) {
+      const w = WF.load(base);
+      if (c.setup) WF.acceptPlan(w, WF.checkPlan(w, c.setup, c.spot).clean, { spot: c.spot });
+      // A case can move an animal or change its needs, e.g. a thirsty Mossback on a dry ridge.
+      for (const a of c.animals || []) {
+        const cr = w.creatures.find((k) => k.name === a.name);
+        if (!cr) continue;
+        if (a.x !== undefined) Object.assign(cr, { x: a.x + 0.5, y: a.y + 0.5, goal: null, next: -1 });
+        for (const k of ["thirst", "hunger"]) if (a[k] !== undefined) cr[k] = a[k];
+      }
+      caseBase = WF.save(w);
+    }
     const result = await shapeWhim({ world: WF.load(caseBase), spot: c.spot, whim: c.whim, model: localModel(config) });
     const without = WF.load(caseBase), withPlan = WF.load(caseBase);
     const knownMaterials = withPlan.materials.length;

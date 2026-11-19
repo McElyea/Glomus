@@ -2,6 +2,20 @@
 
 Updated: November 17, 2026. Read this first, then [PLAYTEST_FEEDBACK.md](../PLAYTEST_FEEDBACK.md).
 
+## Session of Nov 18: animals (steps 1–2 of [CREATURES.md](CREATURES.md))
+
+- **Mossback.** Every new world has Mossback, a built-in grazer, in a "Wildlife (built in)" skein (skein 2). Whim
+  skeins now start at 3. It's written in the same species format whims use.
+- **Behaviour.** Animals drink, eat (meadow becomes soil), flee, search and die on their own. They use their own
+  random stream (`crng`), and saves, rewind and erase all carry them.
+- **Whims.** They can define `species` and `release` animals. Routing still refuses herds, breeding, flying,
+  swimming, hunting and people.
+- **Page.** Animals panel with both scores, glyphs on the map, hovering an animal or its row, a legend, and
+  "Release another grazer".
+- **Tests.** `npm test`: 77, written test-first for animals. New eval cases `thirsty-animal` (calibrated: unhelped,
+  it's at 15% and still searching at 30 s) and `invent-species`.
+- **Not committed yet.** This and the palette move, README and demo-recorder fixes.
+
 ## Session of Nov 17 (evening): tools and honest whims
 
 Built per [POWERS.md](POWERS.md), revised after Codex's review ([POWERS_REVIEW.md](POWERS_REVIEW.md)). Not committed.

@@ -28,7 +28,7 @@ const BUILTIN = [
   { name: "meadow", color: "#6c9a46", erodes: 0.3 },
   { name: "snow", color: "#eef2f6", erodes: 0.1 },
 ];
-const LIMITS = { threads: 6, edits: 8, materials: 4, powers: 3, conds: 6, actions: 6, pathPoints: 40, skeins: 60, materialsTotal: 24 };
+const LIMITS = { threads: 6, edits: 8, materials: 4, powers: 3, species: 2, speciesTotal: 8, release: 6, creatures: 24, conds: 6, actions: 6, pathPoints: 40, skeins: 60, materialsTotal: 24 };
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 const isNum = (v) => typeof v === "number" && Number.isFinite(v);
@@ -65,6 +65,7 @@ function blank(seed) {
     height: new Float32Array(N), water: new Float32Array(N), silt: new Float32Array(N),
     mat: new Uint8Array(N), flux: new Float32Array(N),
     materials: BUILTIN.map((m) => ({ ...m })), skeins: [], nextSkein: 1, nextUse: 1,
+    species: [], creatures: [], graveyard: [], nextCreature: 1, crng: (seed ^ 0x2545f491) | 0, whims: 0,
     weather: { raining: false, until: 900 },
     _compiled: new Map(),
   };
@@ -99,6 +100,7 @@ function makeWorld(seed, warmTicks = 900) {
   for (let t = 0; t < warmTicks; t++) step(world);
   world.tick = 0;
   world.weather = { raining: false, until: 600 };
+  addWildlife(world);
   return world;
 }
 
@@ -185,6 +187,7 @@ function step(world) {
   flowWater(world);
   erodeAndEvaporate(world);
   runThreads(world);
+  stepCreatures(world);
   world.tick++;
 }
 
@@ -544,14 +547,29 @@ function checkPlan(world, plan, spot) {
   if (threadsRaw.length > LIMITS.threads) problems.push(`only the first ${LIMITS.threads} threads were kept`);
   const edits = editsRaw.slice(0, LIMITS.edits).map((e) => checkEdit(e, names, problems, spot)).filter(Boolean);
   const threads = threadsRaw.slice(0, LIMITS.threads).map((r) => checkThread(r, names, problems, spot)).filter(Boolean);
+  const taken = new Set(world.species.map((sp) => sp.name)), speciesRaw = list(plan.species ?? plan.animals, "species");
+  if (speciesRaw.length > LIMITS.species) problems.push(`only the first ${LIMITS.species} species were kept`);
+  const species = [];
+  speciesRaw.forEach((raw, k) => {
+    const sp = checkSpecies(raw, names, taken, problems);
+    if (!sp || k >= LIMITS.species) return;
+    if (taken.size >= LIMITS.speciesTotal) { problems.push("the world has no room for more species"); return; }
+    taken.add(sp.name); species.push(sp);
+  });
+  let budget = LIMITS.release;
+  const release = list(plan.release, "release").map((r) => checkRelease(r, taken, problems, spot)).filter(Boolean).filter((r) => {
+    if (budget <= 0) { problems.push(`a plan can release at most ${LIMITS.release} animals`); return false; }
+    if (r.count > budget) { problems.push(`a plan can release at most ${LIMITS.release} animals, so fewer were released`); r.count = budget; }
+    budget -= r.count; return true;
+  });
   const powersRaw = list(plan.powers ?? plan.tools, "powers");
   if (powersRaw.length > LIMITS.powers) problems.push(`only the first ${LIMITS.powers} tools were kept`);
   const powers = powersRaw.slice(0, LIMITS.powers).map((t) => checkPower(t, names, problems, world)).filter(Boolean);
   const say = typeof plan.say === "string" ? plan.say.trim().slice(0, 400) : "";
   const name = typeof plan.name === "string" ? plan.name.trim().slice(0, 60) : "";
-  const usable = materials.length + switchOff.length + edits.length + threads.length + powers.length > 0;
+  const usable = materials.length + switchOff.length + edits.length + threads.length + powers.length + species.length + release.length > 0;
   if (!usable && !say) problems.push("nothing in the reply could be used");
-  return { clean: { name, say, materials, switch_off: switchOff, edits, threads, powers }, problems, usable };
+  return { clean: { name, say, materials, switch_off: switchOff, edits, threads, powers, species, release }, problems, usable };
 }
 
 // ---------- compiling threads ----------
@@ -767,8 +785,9 @@ function applyEdits(world, skein) { applyEditList(world, skein.edits, skein.rec)
 
 /** Accept a checked plan as a new skein. Returns the skein, or null when the plan only talked. */
 function acceptPlan(world, clean, meta = {}) {
-  const powers = clean.powers || [];
-  if (!clean.materials.length && !clean.switch_off.length && !clean.edits.length && !clean.threads.length && !powers.length) return null;
+  const powers = clean.powers || [], species = clean.species || [], release = clean.release || [];
+  if (!clean.materials.length && !clean.switch_off.length && !clean.edits.length && !clean.threads.length && !powers.length && !species.length && !release.length) return null;
+  world.whims = (world.whims || 0) + 1;
   const skein = addSkein(world, {
     name: clean.name || (powers[0] && powers[0].name) || (clean.threads[0] && clean.threads[0].name) || (meta.whim || "A whim").slice(0, 40),
     whim: meta.whim || "", say: clean.say, spot: meta.spot || null,
@@ -792,6 +811,10 @@ function acceptPlan(world, clean, meta = {}) {
     if (other && other.on) { other.on = false; skein.switched.push(id); }
   }
   applyEdits(world, skein);
+  for (const sp of species) world.species.push({ ...JSON.parse(JSON.stringify(sp)), from: skein.id });
+  skein.species = species.map((sp) => sp.name);
+  skein.release = JSON.parse(JSON.stringify(release));
+  releaseAnimals(world, skein, release);
   tidyRecords(world);
   return skein;
 }
@@ -823,6 +846,9 @@ function eraseSkein(world, id) {
   }
   for (const mb of skein.materialBefore) if (mb.before) Object.assign(world.materials.find((m) => m.name === mb.name) || {}, mb.before);
   for (const sid of skein.switched) setSkeinOn(world, sid, true);
+  // Its animals go; a species it defined goes too, unless other skeins released animals of it.
+  world.creatures = (world.creatures || []).filter((c) => c.skein !== id);
+  world.species = (world.species || []).filter((sp) => sp.from !== id || world.creatures.some((c) => c.species === sp.name));
   world.skeins.splice(k, 1);
   world._compiled.delete(id);
   return true;
@@ -931,6 +957,7 @@ function usePower(world, powerId, where) {
   }
   const changed = applyEditList(world, power.edits, use.rec, useArea(use));
   power.uses.push(use);
+  world.whims = (world.whims || 0) + 1;
   world._compiled.delete(skein.id);
   tidyUses(world);
   tidyRecords(world);
@@ -1007,9 +1034,270 @@ function saveForModel(world) {
   return out;
 }
 
+// ---------- animals ----------
+// Species are data, like materials; animals act on their own and only read the world. The built-in grazer is written
+// in the same format a whim uses to invent one. Animals draw randomness from their own stream (crng), never the
+// weather's. See docs/CREATURES.md.
+const PATTERNS = ["dot", "ring", "stripe", "diamond", "cross"];
+const GRAZER = { name: "grazer", look: { color: "#e8d27a", pattern: "dot" }, eats: ["meadow"], avoids: ["snow"], wades: 0.3, climbs: 1.5, speed: 1, thirst: 120, hunger: 240 };
+const SIGHT = 12, DRINK_SECONDS = 5, EAT_SECONDS = 6, GRAZE_SECONDS = 3, DOOM_SECONDS = 5, MARKER_SECONDS = 30;
+
+const speciesOf = (world, name) => world.species.find((s) => s.name === name);
+const tileIndex = (c) => clamp(Math.floor(c.y), 0, H - 1) * W + clamp(Math.floor(c.x), 0, W - 1);
+
+function avoidsSet(world, sp) { return new Set(sp.avoids.map((m) => matIndex(world, m))); }
+function standable(world, sp, avoid, i) { return world.water[i] <= sp.wades && !avoid.has(world.mat[i]); }
+function canStep(world, sp, avoid, from, to) { return standable(world, sp, avoid, to) && Math.abs(world.height[to] - world.height[from]) <= sp.climbs; }
+
+/** An unnamed animal is called after its species and how many of them there have been: "Sunscale 3". */
+function defaultName(world, species) {
+  const n = world.creatures.filter((c) => c.species === species).length + (world.graveyard || []).filter((c) => c.species === species).length + 1;
+  return species.charAt(0).toUpperCase() + species.slice(1) + " " + n;
+}
+
+/** Add an animal at tile (x, y). Returns it. */
+function addCreature(world, spec) {
+  const sp = speciesOf(world, spec.species);
+  if (!sp) throw new Error(`no species ${spec.species}`);
+  const id = world.nextCreature++;
+  const c = {
+    id, species: sp.name, name: spec.name || defaultName(world, sp.name), x: Math.floor(spec.x) + 0.5, y: Math.floor(spec.y) + 0.5,
+    thirst: 1, hunger: 1, state: "wandering", born: world.tick, skein: spec.skein ?? null, thriving: 0, whimsAtBirth: world.whims || 0,
+    goal: null, next: -1, decideAt: world.tick, eaten: 0, doom: 0,
+  };
+  world.creatures.push(c);
+  return c;
+}
+
+/** Nearest tile within SIGHT that passes test, scanning outward. Returns an index or -1. */
+function nearestTile(c, test) {
+  const cx = Math.floor(c.x), cy = Math.floor(c.y);
+  let best = -1, bestD = Infinity;
+  for (let dy = -SIGHT; dy <= SIGHT; dy++) for (let dx = -SIGHT; dx <= SIGHT; dx++) {
+    const x = cx + dx, y = cy + dy, d = dx * dx + dy * dy;
+    if (x < 0 || y < 0 || x >= W || y >= H || d > SIGHT * SIGHT || d >= bestD) continue;
+    const i = y * W + x;
+    if (test(i)) { best = i; bestD = d; }
+  }
+  return best;
+}
+function besideWater(world, i) {
+  const x = i % W, y = (i - x) / W;
+  if (world.water[i] >= WET) return true;
+  for (const [dx, dy] of N8) { const nx = x + dx, ny = y + dy; if (nx >= 0 && ny >= 0 && nx < W && ny < H && world.water[ny * W + nx] >= WET) return true; }
+  return false;
+}
+
+function die(world, c, cause) { c.dead = true; c.diedOf = cause; c.diedAt = world.tick; c.state = "dead"; c.next = -1; c.goal = null; }
+
+/** Once a second (or when idle): flee, drink, eat or wander, in that order. */
+function decide(world, c, sp, avoid) {
+  const i = tileIndex(c), food = new Set(sp.eats.map((m) => matIndex(world, m)));
+  const goTo = (target, state) => { c.goal = target; c.state = state; };
+  const search = (what) => {
+    const ang = rand(world, "crng") * Math.PI * 2;
+    const gx = clamp(Math.round(c.x + Math.cos(ang) * SIGHT), 0, W - 1), gy = clamp(Math.round(c.y + Math.sin(ang) * SIGHT), 0, H - 1);
+    goTo(gy * W + gx, "searching for " + what);
+  };
+  if (!standable(world, sp, avoid, i)) {
+    const safe = nearestTile(c, (j) => standable(world, sp, avoid, j));
+    goTo(safe, "fleeing"); return;
+  }
+  // Once it starts on a need (seeking, drinking, searching), it keeps at it until it's nearly full.
+  const onWater = /water$|^drinking$/.test(c.state) && c.thirst < 0.95;
+  if (c.thirst < 0.5 || onWater) {
+    if (besideWater(world, i)) { c.goal = null; c.state = "drinking"; return; }
+    const t = nearestTile(c, (j) => standable(world, sp, avoid, j) && besideWater(world, j));
+    if (t >= 0) goTo(t, "seeking water"); else if (!c.state.startsWith("searching for water") || c.goal === null) search("water");
+    return;
+  }
+  const onFood = /food$|^eating$/.test(c.state) && c.hunger < 0.95;
+  if (c.hunger < 0.5 || onFood) {
+    if (food.has(world.mat[i])) { c.goal = null; c.state = "eating"; return; }
+    const t = nearestTile(c, (j) => standable(world, sp, avoid, j) && food.has(world.mat[j]));
+    if (t >= 0) goTo(t, "seeking food"); else if (!c.state.startsWith("searching for food") || c.goal === null) search("food");
+    return;
+  }
+  if (c.state !== "wandering" || c.goal === null) {
+    for (let k = 0; k < 8; k++) {
+      const gx = clamp(Math.floor(c.x) + Math.round((rand(world, "crng") - 0.5) * 12), 0, W - 1);
+      const gy = clamp(Math.floor(c.y) + Math.round((rand(world, "crng") - 0.5) * 12), 0, H - 1);
+      if (standable(world, sp, avoid, gy * W + gx)) { goTo(gy * W + gx, "wandering"); return; }
+    }
+    c.goal = null; c.state = "resting";
+  }
+}
+
+/** Walk from tile centre to neighbouring tile centre, choosing greedily the step that most reduces the distance. */
+function move(world, c, sp, avoid) {
+  if (c.goal === null || c.goal < 0) return;
+  let step = sp.speed * DT;
+  while (step > 1e-9) {
+    if (c.next < 0) {
+      const i = tileIndex(c), x = i % W, y = (i - x) / W, gx = c.goal % W, gy = (c.goal - gx) / W;
+      if (i === c.goal) { c.goal = null; return; }
+      let best = -1, bestD = Math.hypot(gx - x, gy - y) - 1e-6;
+      for (const [dx, dy] of N8) {
+        const nx = x + dx, ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+        const j = ny * W + nx, d = Math.hypot(gx - nx, gy - ny);
+        if (d < bestD && canStep(world, sp, avoid, i, j)) { best = j; bestD = d; }
+      }
+      if (best < 0) { c.goal = null; c.decideAt = world.tick + TPS; return; }   // stuck: try again in a second
+      c.next = best;
+    }
+    const tx = (c.next % W) + 0.5, ty = Math.floor(c.next / W) + 0.5, d = Math.hypot(tx - c.x, ty - c.y);
+    if (d <= step) { c.x = tx; c.y = ty; c.next = -1; step -= d; }
+    else { c.x += ((tx - c.x) / d) * step; c.y += ((ty - c.y) / d) * step; step = 0; }
+  }
+}
+
+function stepCreatures(world) {
+  if (!world.creatures || !world.creatures.length) return;
+  const keep = [];
+  for (const c of world.creatures) {
+    if (c.dead) {
+      if (world.tick - c.diedAt < MARKER_SECONDS * TPS) keep.push(c);
+      else { world.graveyard.push(lifeOf(world, c)); if (world.graveyard.length > 20) world.graveyard.shift(); }
+      continue;
+    }
+    keep.push(c);
+    const owner = c.skein === null ? null : world.skeins.find((s) => s.id === c.skein);
+    if (owner && !owner.on) continue;   // its skein is switched off: paused
+    const sp = speciesOf(world, c.species);
+    if (!sp) continue;
+    const avoid = avoidsSet(world, sp);
+    c.thirst -= DT / sp.thirst; c.hunger -= DT / sp.hunger;
+    if (c.thirst <= 0) { c.thirst = 0; die(world, c, "thirst"); continue; }
+    if (c.hunger <= 0) { c.hunger = 0; die(world, c, "hunger"); continue; }
+    if (c.thirst > 0.5 && c.hunger > 0.5) c.thriving += DT;
+    const i = tileIndex(c);
+    // Deep water drowns it and avoided ground (fire, say) kills it, after five seconds.
+    const avoided = avoid.has(world.mat[i]);
+    if (world.water[i] > sp.wades + 1 || avoided) {
+      if (++c.doom >= DOOM_SECONDS * TPS) { die(world, c, avoided ? world.materials[world.mat[i]].name : "drowned"); continue; }
+    } else c.doom = 0;
+    if (world.tick >= c.decideAt || c.goal === null && c.next < 0 && !["drinking", "eating"].includes(c.state)) {
+      decide(world, c, sp, avoid);
+      c.decideAt = world.tick + TPS;
+    }
+    if (c.state === "drinking") {
+      c.thirst = Math.min(1, c.thirst + DT / DRINK_SECONDS);
+      if (c.thirst >= 1) c.state = "wandering";
+    } else if (c.state === "eating") {
+      const food = new Set(sp.eats.map((m) => matIndex(world, m)));
+      if (food.has(world.mat[i])) {
+        c.hunger = Math.min(1, c.hunger + DT / EAT_SECONDS);
+        if (++c.eaten >= GRAZE_SECONDS * TPS) { world.mat[i] = 0; c.eaten = 0; }   // grazed down to soil
+      }
+      if (c.hunger >= 1) c.state = "wandering";
+    } else move(world, c, sp, avoid);
+  }
+  world.creatures = keep;
+}
+
+function lifeOf(world, c) {
+  const end = c.dead ? c.diedAt : world.tick;
+  return { id: c.id, name: c.name, species: c.species, alive: !c.dead, ageSeconds: (end - c.born) / TPS, thrivingSeconds: c.thriving,
+    whimsSince: (world.whims || 0) - c.whimsAtBirth, diedOf: c.diedOf || null, state: c.state };
+}
+/** Every animal on the map, alive or a fresh marker, plus the recently gone: age, time thriving, whims since birth. */
+function lifeStats(world) {
+  return world.creatures.map((c) => lifeOf(world, c)).concat(world.graveyard || []);
+}
+
+/** A walkable meadow or soil tile within 12 tiles of water, nearest the map centre, for a grazer to start on. */
+function grazerHome(world) {
+  const sp = speciesOf(world, "grazer"), avoid = avoidsSet(world, sp), ok = new Set([matIndex(world, "meadow"), matIndex(world, "soil")]);
+  let best = -1, bestD = Infinity;
+  for (let y = 2; y < H - 2; y++) for (let x = 2; x < W - 2; x++) {
+    const i = y * W + x, d = Math.hypot(x - W / 2, y - H / 2);
+    if (d >= bestD || !ok.has(world.mat[i]) || !standable(world, sp, avoid, i)) continue;
+    if (nearestTile({ x: x + 0.5, y: y + 0.5 }, (j) => world.water[j] > WET) >= 0) { best = i; bestD = d; }
+  }
+  return best;
+}
+
+/** Release a grazer named `name` at a good home. Used for the first animal and for "Release another". */
+function releaseGrazer(world, name) {
+  const home = grazerHome(world), wild = world.skeins.find((s) => s.kind === "nature" && /Wildlife/.test(s.name));
+  if (home < 0) return null;
+  return addCreature(world, { species: "grazer", x: home % W, y: Math.floor(home / W), name, skein: wild ? wild.id : null });
+}
+
+function addWildlife(world) {
+  world.species.push(JSON.parse(JSON.stringify(GRAZER)));
+  const s = addSkein(world, { kind: "nature", name: "Wildlife (built in)", say: "The animals this world starts with. A species is written in the same format a whim uses to invent one." });
+  s.species = ["grazer"];
+  releaseGrazer(world, "Mossback");
+}
+
+// ---------- validating species and releases ----------
+function checkSpecies(raw, names, taken, problems) {
+  if (!raw || typeof raw !== "object") { problems.push("each species must be an object"); return null; }
+  const name = lowerName(raw.name);
+  if (!/^[a-z][a-z -]{0,19}$/.test(name)) { problems.push(`species name "${raw.name}" must be 1-20 lowercase letters`); return null; }
+  if (taken.has(name)) { problems.push(`there is already a species ${name}, so a second one was dropped`); return null; }
+  const look = raw.look && typeof raw.look === "object" ? raw.look : { color: raw.color, pattern: raw.pattern };
+  const color = typeof look.color === "string" && /^#[0-9a-f]{6}$/i.test(look.color.trim()) ? look.color.trim().toLowerCase() : null;
+  if (!color) { problems.push(`species ${name} needs a color like #a1b2c3, so it was dropped`); return null; }
+  let pattern = lowerName(look.pattern) || "dot";
+  if (!PATTERNS.includes(pattern)) { problems.push(`species ${name}: pattern "${look.pattern}" isn't one of ${PATTERNS.join(", ")}; using dot`); pattern = "dot"; }
+  const listOf = (v) => (Array.isArray(v) ? v : v === undefined || v === null ? [] : [v]).map(lowerName);
+  const eats = listOf(raw.eats).slice(0, 3);
+  const unknown = eats.filter((m) => !names.has(m));
+  if (!eats.length || unknown.length) { problems.push(`species ${name} eats ${unknown.length ? "unknown material " + unknown.join(", ") : "nothing"}, so it was dropped`); return null; }
+  const avoids = listOf(raw.avoids).slice(0, 3).filter((m) => names.has(m) || (problems.push(`species ${name}: avoids unknown material ${m}; ignored`), false))
+    // It has to stand on its food to eat it, so it can't avoid what it eats.
+    .filter((m) => !eats.includes(m) || (problems.push(`species ${name} can't both eat and avoid ${m}; it no longer avoids it`), false));
+  const num = (k, lo, hi, def) => (raw[k] === undefined ? def : checkNumber(raw[k], lo, hi, `species ${name} ${k}`, problems) ?? def);
+  return { name, look: { color, pattern }, eats, avoids, wades: num("wades", 0, 2, 0.3), climbs: num("climbs", 0.5, 5, 1.5), speed: num("speed", 0.2, 3, 1),
+    thirst: num("thirst", 30, 1200, 120), hunger: num("hunger", 30, 1200, 240) };
+}
+
+function checkRelease(raw, speciesNames, problems, spot) {
+  if (!raw || typeof raw !== "object") { problems.push("each release must be an object"); return null; }
+  const species = lowerName(raw.species);
+  if (!speciesNames.has(species)) { problems.push(`release: no species ${raw.species}`); return null; }
+  const p = [];
+  const area = checkArea(raw.area ?? raw.where ?? "spot", p, spot);
+  for (const m of p) problems.push("release: " + m);
+  if (!area) return null;
+  const count = raw.count === undefined ? 1 : checkNumber(raw.count, 1, LIMITS.release, "release count", problems);
+  if (count === null) return null;
+  const out = { species, area, count: Math.round(count) };
+  if (Array.isArray(raw.names)) out.names = raw.names.filter((n) => typeof n === "string").map((n) => n.trim().slice(0, 20)).filter(Boolean).slice(0, out.count);
+  return out;
+}
+
+/** Put released animals on standable tiles of their area, spread out at random. */
+function releaseAnimals(world, skein, release) {
+  for (const r of release) {
+    const sp = speciesOf(world, r.species), avoid = avoidsSet(world, sp);
+    const cells = Array.from(areaShape(r.area).cells).filter((i) => standable(world, sp, avoid, i));
+    let placed = 0;
+    for (let k = 0; k < r.count && cells.length; k++, placed++) {
+      const i = cells.splice(Math.floor(rand(world, "crng") * cells.length), 1)[0];
+      addCreature(world, { species: sp.name, x: i % W, y: Math.floor(i / W), name: r.names && r.names[k], skein: skein.id });
+    }
+    // Recorded on the skein's copy of the release, so "What it does" says how many really found ground to stand on.
+    const mine = (skein.release || []).find((x) => x.species === r.species && x.count === r.count && x.released === undefined);
+    if (mine) mine.released = placed;
+  }
+}
+
+function speciesText(sp) {
+  const parts = [`eats ${sp.eats.join(" or ")}`];
+  if (sp.avoids.length) parts.push(`avoids ${sp.avoids.join(" and ")}`);
+  parts.push(`wades up to ${num(sp.wades)} m`, `climbs ${num(sp.climbs)} m steps`);
+  return `New animal: ${sp.name} (${sp.look.color} ${sp.look.pattern}). It ${parts.join(", ")} and walks ${num(sp.speed)} tile${sp.speed === 1 ? "" : "s"} a second. ` +
+    `It can go ${secs(sp.thirst)} without water and ${secs(sp.hunger)} without food.`;
+}
+
 // ---------- plain-language descriptions, generated from the plan (never from the model's prose) ----------
 const num = (v) => String(Math.round(v * 100) / 100);
 const secs = (s) => (s >= 60 && s % 60 === 0 ? `${s / 60} min` : `${num(s)} s`);
+const spanText = secs;   // for describe(), where a local named secs is the clock
 
 function placeText(area) {
   if (area === "everywhere") return "everywhere";
@@ -1111,6 +1399,15 @@ function explainPlan(plan, world) {
   for (const e of plan.edits || []) lines.push(editText(e));
   for (const t of plan.threads || []) lines.push(threadText(t, placeText(t.area)));
   for (const p of plan.powers || []) lines.push(powerText(p));
+  for (const sp of plan.species || []) {
+    const def = typeof sp === "string" ? world && speciesOf(world, sp) : sp;
+    if (def) lines.push(speciesText(def));
+  }
+  for (const r of plan.release || []) {
+    const short = r.released !== undefined && r.released < r.count;
+    lines.push(`Releases ${r.count} ${r.species}${r.count === 1 ? "" : "s"} ${placeText(r.area)}.` +
+      (short ? ` Only ${r.released} found ground there ${r.released === 1 ? "it" : "they"} could stand on.` : ""));
+  }
   for (const id of plan.switch_off || plan.switched || []) {
     const s = world && world.skeins.find((k) => k.id === id);
     lines.push(`Switches off skein ${id}${s ? " (" + s.name + ")" : ""}.`);
@@ -1166,6 +1463,15 @@ function describe(world, spot) {
     const tools = (l.powers || []).map((p) => `tool "${p.name}" (id ${p.id}, ${p.brush.stroke ? "drag, width " + p.brush.stroke : "click, radius " + p.brush.circle}, used ${p.uses.length} time${p.uses.length === 1 ? "" : "s"}${p.retired ? ", " + p.retired + ", not in the palette" : ""})`).join("; ");
     lines.push(`  ${l.id}. ${l.name} (${l.on ? "on" : "off"}): ${threads}${tools ? "; " + tools : ""}`);
   }
+  const living = (world.creatures || []).filter((c) => !c.dead);
+  if (living.length) {
+    lines.push("Animals (they act on their own: they drink, eat and flee by themselves; you can only change the land around them):");
+    for (const sp of world.species) {
+      if (!living.some((c) => c.species === sp.name)) continue;
+      lines.push(`  species ${sp.name}: drinks from water up to ${num(sp.wades)} m deep, eats ${sp.eats.join(" or ")}${sp.avoids.length ? ", avoids " + sp.avoids.join(" and ") : ""}, climbs steps up to ${num(sp.climbs)} m, sees ${SIGHT} tiles; lasts ${spanText(sp.thirst)} without water and ${spanText(sp.hunger)} without food.`);
+    }
+    for (const c of living.slice(0, 12)) lines.push(`  ${c.name} (${c.species}) at (${Math.floor(c.x)},${Math.floor(c.y)}): thirst ${Math.round(c.thirst * 100)}%, hunger ${Math.round(c.hunger * 100)}%, ${c.state}.`);
+  }
   if (spot) {
     const { cells } = areaShape({ circle: [spot.x, spot.y, spot.r] });
     let hmin = 99, hmax = 0, hsum = 0, wsum = 0; const counts = new Map();
@@ -1199,7 +1505,8 @@ function fromB64(str, Type, length) {
   if (out.length !== length) throw new Error("save is damaged");
   return out;
 }
-const META = ["seed", "tick", "rng", "wrng", "nextSkein", "nextUse"];
+const META = ["seed", "tick", "rng", "wrng", "nextSkein", "nextUse", "nextCreature", "crng", "whims"];
+const LIVES = ["species", "creatures", "graveyard"];
 
 function save(world) {
   const out = { version: world.version };
@@ -1207,6 +1514,7 @@ function save(world) {
   out.weather = { ...world.weather };
   out.materials = JSON.parse(JSON.stringify(world.materials));
   out.skeins = JSON.parse(JSON.stringify(world.skeins));
+  for (const k of LIVES) out[k] = JSON.parse(JSON.stringify(world[k] || []));
   for (const k of ["height", "water", "silt", "flux"]) out[k] = toB64(world[k]);
   out.mat = toB64(world.mat);
   return out;
@@ -1219,6 +1527,7 @@ function load(data) {
   world.weather = { ...data.weather };
   world.materials = JSON.parse(JSON.stringify(data.materials));
   world.skeins = JSON.parse(JSON.stringify(data.skeins));
+  for (const k of LIVES) world[k] = JSON.parse(JSON.stringify(data[k] || []));   // saves from before animals have none
   for (const k of ["height", "water", "silt", "flux"]) world[k] = fromB64(data[k], Float32Array, N);
   world.mat = fromB64(data.mat, Uint8Array, N);
   return world;
@@ -1228,13 +1537,16 @@ function load(data) {
 function snapshot(world) {
   return {
     tick: world.tick, rng: world.rng, wrng: world.wrng, nextSkein: world.nextSkein, nextUse: world.nextUse, weather: { ...world.weather },
+    nextCreature: world.nextCreature, crng: world.crng, whims: world.whims, lives: JSON.parse(JSON.stringify(LIVES.map((k) => world[k] || []))),
     materials: JSON.parse(JSON.stringify(world.materials)), skeins: JSON.parse(JSON.stringify(world.skeins)),
     height: world.height.slice(), water: world.water.slice(), silt: world.silt.slice(), flux: world.flux.slice(), mat: world.mat.slice(),
   };
 }
 
 function restore(world, snap) {
-  world.tick = snap.tick; world.rng = snap.rng; world.wrng = snap.wrng; world.nextSkein = snap.nextSkein; world.nextUse = snap.nextUse ?? world.nextUse; world.weather = { ...snap.weather };
+  world.tick = snap.tick; world.rng = snap.rng; world.wrng = snap.wrng; world.nextSkein = snap.nextSkein; world.nextUse = snap.nextUse ?? world.nextUse;
+  world.nextCreature = snap.nextCreature; world.crng = snap.crng; world.whims = snap.whims;
+  LIVES.forEach((k, j) => { world[k] = JSON.parse(JSON.stringify(snap.lives[j])); }); world.weather = { ...snap.weather };
   world.materials = JSON.parse(JSON.stringify(snap.materials)); world.skeins = JSON.parse(JSON.stringify(snap.skeins));
   for (const k of ["height", "water", "silt", "flux", "mat"]) world[k].set(snap[k]);
   world._compiled = new Map();
@@ -1245,4 +1557,5 @@ export {
   makeWorld, step, checkPlan, acceptPlan, setSkeinOn, eraseSkein, describe, describeArea, areaShape,
   threadActivity, save, load, snapshot, restore, countNear, explainPlan,
   usePower, undoUse, lastUse, useStates, findPower, saveForModel, LIVE_USES, powerOnceText, useArea, setPowerRemoved,
+  addCreature, lifeStats, releaseGrazer, speciesOf, PATTERNS,
 };

@@ -23,13 +23,60 @@ above them.
 Double-click **Play Glomus.vbs**, or run `npm start`. It serves the game at http://127.0.0.1:8840/ and starts
 the local model if nothing answers at the configured address.
 
-- **Click** the map to choose a spot; **drag** to size it. The model calls it "here".
-- **Ask the world** (Ctrl+Enter) queues a whim. While the model works, its spot shows a moving dashed ring
-  and its card lists each step: what it looked at, what its preview showed, when it committed.
-- **Skeins** lists every whim with what the model said and how many tiles each thread is acting on.
-  *Switch off* pauses its threads; *Erase* also restores the ground its edits changed.
+- **Click** the map to choose a spot. The model calls it "here". Size it with **◀ ▶** in the palette above the
+  map, or with **[** and **]**.
+- **Ask the world** (Ctrl+Enter) queues a whim. While the model works, its spot shows a moving dashed ring,
+  and its card lists each step: what it looked at, what its preview showed, and when it finished.
+- **The world can say no.** When a whim asks for something Glomus doesn't have, such as a double-click, a key,
+  days of time or creatures, the card says *Can't do* and offers the closest thing it can make, with
+  **Apply** and **No thanks**. Nothing is applied until you choose. Sometimes it just explains why it can't.
+- **Skeins** lists every whim. Each card leads with **What it does**, a description generated from the plan
+  itself, so it can't promise more than the plan does. The model's own words come below it.
+  - *Switch off* pauses a skein's threads and tools.
+  - *Erase* stops them and takes back what they did to the ground, leaving later whims' changes alone.
+    It doesn't replay the world; *Rewind* does that.
 - **Rewind** goes back up to three minutes. **Rain**, **Pause** (Space) and **speed** are in the header.
 - *Write a plan by hand* applies a plan in the same JSON the model writes.
+
+### Tools
+
+Ask for a tool and it appears in **Your tools**, in the palette above the map. Examples: *a tool that raises a
+hill where I click*, *a rain cloud I can drop anywhere*, *a tool that digs a channel where I drag*. The 🛠
+ideas under the whim box are tool ideas.
+
+- Pick a tool, or press its number key **1–9**, then **click** the map to use it. A tool marked ⤳ is a drag
+  tool: **drag** across the map instead. **Escape** goes back to choosing spots.
+- Nothing happens until you use a tool. Each use can change the ground once, keep acting there, or both,
+  with its timing counted from that use.
+- A ring marks each use that's still at work. The note beside a new use says what it's doing: *acting*,
+  *starts in 8 s*, *waiting for rain*, *holding at 6 m*, *the water has arrived*.
+- **↶ Undo** (Ctrl+Z) takes back your last use. It stops that use and takes back what it did to the ground,
+  but water it added stays.
+- To change a tool you have, ask (*make my rain cloud rain twice as hard*). The new one takes the old one's
+  place in the palette, and the old tool's earlier uses keep going.
+- A tool's card has **Remove** to take it off the palette (what it made stays) and **Put back** to return it.
+- A `?seed=` page starts its world over on every reload, tools included. Your own world at
+  http://127.0.0.1:8840/ is saved in the browser.
+
+### Animals
+
+Every new world starts with **Mossback**, a grazer. It lives on its own:
+- it drinks next to water and eats meadow, which leaves soil where it grazed;
+- it flees floods and avoids snow;
+- it sees 12 tiles around it;
+- it dies if it goes too long without water or food.
+
+You can't steer it. You can only change the land around it.
+
+- The **Animals** panel shows each animal's water and food, what it's doing, and two scores. Thriving % rewards
+  a heavy hand; seconds thriving per whim rewards a light touch. Hover a row to find the animal on the map, or
+  hover the animal itself.
+- Whims can invent species and release them: *a few little orange lizards that bask on the warm sand here*. A
+  species is data: its look (a colour and a pattern), what it eats and avoids, how deep it wades, how high it
+  climbs, its speed, and how long it lasts without water or food.
+- **Legend** (under Animals) lists every kind of ground and every species, with counts.
+- Animals can't fly, swim, breed, form herds or hunt yet. Whims that ask for those come back as proposals. See
+  `docs/CREATURES.md`.
 
 ## The model
 
@@ -43,10 +90,17 @@ match; remove the `launch` section to use one that is already running.
 - `game/world.js`: the world as an ES module with no DOM: terrain, water, erosion, weather, the thread
   language, plan validation (`checkPlan`), skeins, saves and the report the model reads. Runs in the page
   and in Node.
-- `game/index.html`: the map, the whim queue with live steps, the skeins panel.
+- `game/index.html`: the map, the tool palette, the whim queue with live steps, the skeins panel.
 - `server/shaper.js`: the harness. A [Pi](https://www.npmjs.com/package/@mariozechner/pi-agent-core) agent
-  with four tools (`look`, `read_skein`, `try_plan`, `commit`), at most 8 tool calls per whim. Its `LANGUAGE`
-  prompt is the thread language's reference.
+  with tools to look, read a skein, preview a plan (`try_plan`), and finish with `commit`, `propose` or
+  `decline`. It gets at most 8 tool calls per whim. Its `LANGUAGE` prompt is the thread language's reference.
+- `server/claims.js`: honesty checks.
+  - It reads the player's request for things Glomus can't do, so a substitute is always proposed, never
+    committed as if it were the real thing.
+  - It checks the model's message against the plan: heights, durations, endings, triggers.
+  - Its fixtures are in `game/tools/claims_test.js`.
+- Tools, their uses and undo are in `world.js` (`usePower`, `useStates`, `undoUse`). The design and its
+  review are in `docs/POWERS.md` and `docs/POWERS_REVIEW.md`.
 - `server/server.js`: the local server. Every whim is saved as a replayable case in `workspace/whims/`: the
   world it started from, the full transcript, each tool call and the result.
 - `server/model.js`: finds or starts the model server.
@@ -58,13 +112,17 @@ or rewound.
 ## Tests and evals
 
 ```powershell
-npm test                                    # the world and the thread language (17 checks)
+npm test                                    # the world, tools, undo, animals and the honesty checks (77 checks, no model)
 npm run eval                                # every eval case through the real model
 npm run eval -- --only floodgate --repeat 3
 ```
 
 `evals/cases.json` holds whims on a fixed seed with mechanical checks (did water arrive, did a thread act,
 did the new moss spread). Each case is simulated next to an untouched copy of the world and compared.
+
+Some cases check honesty: whether the whim was committed, proposed or declined, and whether the message
+matches the plan. Others check tools: nothing changes before a tool is used, and a use does what was claimed
+where it's used, including in places other than the spot the model previewed.
 Runs are saved to `workspace/evals/` with every plan and transcript, ready for a reviewer, or Claude, to
 judge whether each result actually matches its whim.
 

@@ -35,7 +35,8 @@ WHAT GLOMUS CAN'T DO (use propose or decline; never pretend):
     mouse, hovering or scroll wheels to bind anything to.
   - real time: there are no days or hours, only game seconds and minutes. For "2 days", propose a span of
     seconds or minutes and propose it with unsupported ["days"].
-  - sounds, creatures or anything that moves except water, camera, zoom or 3D views, anything outside the map.
+  - sounds, camera, zoom or 3D views, anything outside the map. Animals exist (see ANIMALS) but can't yet fly,
+    swim, breed, form herds or packs, hunt each other, talk, or follow the player.
 The game reads the player's request: if it asks for one of these, your plan is shown to the player as a proposal
 for them to approve, whichever tool you call. So say plainly what you made instead and how it differs.
 
@@ -109,6 +110,19 @@ icon; they pick it and click the map. Nothing happens until they use it.
     "replaces": "<its id or name>" (ids are in the skein list). It takes the old one's place in the palette; the
     old tool's earlier uses keep going.
 You can't use tools yourself: if the player asks you to use one, make the change directly or tell them how.
+
+ANIMALS live on their own (the world report's Animals lines say where each is and how thirsty and hungry it is).
+You can't move or command them: they drink, eat, flee and die by themselves. You help or harm them only through
+the land. An animal sees 12 tiles; it drinks from a tile next to water, walks only where water is no deeper than it
+wades and steps are no taller than it climbs, eats the materials it eats (eating meadow leaves soil) and flees
+ground it avoids. So to help a thirsty animal, put water it can reach within 12 tiles of it, without flooding the
+tile it stands on.
+  New species: {"species": [{"name": "lizard", "look": {"color": "#e8803a", "pattern": "ring"}, "eats": ["sand"],
+    "avoids": ["meadow"], "wades": 0.1, "climbs": 2, "speed": 1.5, "thirst": 180, "hunger": 300}]}
+    pattern: dot, ring, stripe, diamond or cross. eats and avoids: material names. wades 0-2 m, climbs 0.5-5 m,
+    speed 0.2-3 tiles a second, thirst and hunger: seconds it lasts without water or food (30-1200). At most 2 per plan.
+  Release animals: {"release": [{"species": "lizard", "area": "spot", "count": 2, "names": ["Ember"]}]}, at most 6.
+    Release them where they can live: on ground they can stand on, near the water and food they need.
 To turn an existing skein into a tool, read_skein it and put its threads in a tool.
 
 How the world works: water flows downhill, pools in low ground and leaves over the south edge. Fast water
@@ -142,6 +156,8 @@ const PlanParam = Type.Object({
   threads: Type.Optional(Type.Array(Type.Any())),
   switch_off: Type.Optional(Type.Array(Type.Any())),
   powers: Type.Optional(Type.Array(Type.Any())),
+  species: Type.Optional(Type.Array(Type.Any())),
+  release: Type.Optional(Type.Array(Type.Any())),
 });
 const UnsupportedParam = Type.Array(Type.String(), { description: 'What part of the whim can\'t be done, a few words each, e.g. ["double-click", "days"]. At most 3.' });
 
@@ -278,6 +294,17 @@ export function preview(world, clean, spot, seconds = PREVIEW_SECONDS, useAt = n
       (p.threads.length && !p.threads.some((t) => t.when.some((c) => "within" in c)) ? "; each use keeps acting until undone or switched off." : "."));
   }
   if (uses.length && !useAt && !spot) lines.push("No spot is selected, so tools were tried at the map centre; pass use_at: [x, y] to try one elsewhere.");
+  for (const r of (skein && skein.release) || []) {
+    if (r.released < r.count) lines.push(`Only ${r.released} of the ${r.count} ${r.species} released found ground they can stand on in that area (they can't stand on what they avoid, or in water deeper than they wade). Pick an area that suits them.`);
+  }
+  // Each animal, with the plan and without it: how its needs and its doing changed.
+  for (const c of withPlan.creatures || []) {
+    const o = (without.creatures || []).find((k) => k.id === c.id);
+    const pct = (v) => Math.round(v * 100) + "%";
+    const now = c.dead ? `died of ${c.diedOf}` : `thirst ${pct(c.thirst)}, hunger ${pct(c.hunger)}, ${c.state}`;
+    const then = !o ? "not there" : o.dead ? `died of ${o.diedOf}` : `thirst ${pct(o.thirst)}, hunger ${pct(o.hunger)}, ${o.state}`;
+    lines.push(`Animal ${c.name} (${c.species}) after ${seconds} s: ${now}. Without the plan: ${then}.`);
+  }
   const timed = (c) => "within" in c || "after" in c || (c.not && timed(c.not));
   if (clean.threads.length && !clean.threads.some((t) => t.when.some(timed))) {
     lines.push("None of these threads ever stops on its own: they run until the player switches them off. If the whim has an end, add a within condition.");

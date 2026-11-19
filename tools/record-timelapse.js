@@ -54,8 +54,16 @@ const box = await page.locator("#map").boundingBox();
 const tileXY = (x, y) => [box.x + ((x + 0.5) * box.width) / 96, box.y + ((y + 0.5) * box.height) / 64];
 for (const [x, y, r, text] of WHIMS) {
   if (x !== null) {
-    const [px, py] = tileXY(x, y), [rx] = tileXY(x + r, y);
-    await page.mouse.move(px, py); await page.mouse.down(); await page.mouse.move(rx, py, { steps: 4 }); await page.mouse.up();
+    // The spot's size is a palette control; clicking the map only places the spot.
+    await page.evaluate((r) => {
+      for (let k = 0; k < 40; k++) {
+        const v = Number(document.getElementById("sizeVal").textContent);
+        if (v === r) break;
+        document.getElementById(v < r ? "sizeUp" : "sizeDown").click();
+      }
+    }, r);
+    const [px, py] = tileXY(x, y);
+    await page.mouse.move(px, py); await page.mouse.down(); await page.mouse.up();
   } else {
     await page.click("#clearSpot").catch(() => {});
   }

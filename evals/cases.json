@@ -445,7 +445,7 @@
   {
    "id": "replace-tool",
    "spot": null,
-   "note": "Changing a tool the player already has: the new tool should replace the old one in the palette, not add a second Rain cloud.",
+   "note": "Changing a tool the player already has: the new tool should replace the old one in the palette, not add a second Rain cloud. (Skein 2 is the built-in Wildlife, so the setup tool is 3.0.)",
    "setup": {
     "name": "Rain cloud",
     "powers": [
@@ -483,7 +483,62 @@
     },
     {
      "type": "replaces",
-     "id": "2.0"
+     "id": "3.0"
+    },
+    {
+     "type": "claims_check"
+    }
+   ]
+  },
+  {
+   "id": "thirsty-animal",
+   "spot": null,
+   "note": "Mossback in the far north-west corner of the high ground, a third watered. Without help it is still searching at 30 s with about 15% left (checked: it finds water too late). The whim has to bring water it can reach within its sight (12 tiles), without flooding it.",
+   "animals": [
+    {
+     "name": "Mossback",
+     "x": 6,
+     "y": 6,
+     "thirst": 0.4
+    }
+   ],
+   "whim": "Mossback looks really thirsty, help it",
+   "checks": [
+    {
+     "type": "committed"
+    },
+    {
+     "type": "animal",
+     "name": "Mossback",
+     "min_thirst": 0.5
+    },
+    {
+     "type": "no_switch_off"
+    },
+    {
+     "type": "claims_check"
+    }
+   ]
+  },
+  {
+   "id": "invent-species",
+   "spot": {
+    "x": 75,
+    "y": 50,
+    "r": 4
+   },
+   "note": "A whim invents a species and releases it where it can live; it should survive two more minutes on its own.",
+   "whim": "Add a little orange lizard that loves warm sand and hates water, here",
+   "checks": [
+    {
+     "type": "committed"
+    },
+    {
+     "type": "species_defined"
+    },
+    {
+     "type": "animals_survive",
+     "seconds": 90
     },
     {
      "type": "claims_check"

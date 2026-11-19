@@ -59,11 +59,21 @@ async function tile(tx, ty) {
   return [r.x + ((tx + 0.5) * r.width) / W, r.y + ((ty + 0.5) * r.height) / H];
 }
 async function moveTo(x, y) { await page.mouse.move(x, y, { steps: 28 }); }
+// The spot's size is a palette control (clicking only places it). Set it in the page so the recorded cursor
+// doesn't jump to the size buttons.
+async function setSpotSize(r) {
+  await page.evaluate((r) => {
+    for (let k = 0; k < 40; k++) {
+      const v = Number(document.getElementById("sizeVal").textContent);
+      if (v === r) break;
+      document.getElementById(v < r ? "sizeUp" : "sizeDown").click();
+    }
+  }, r);
+}
 async function pickSpot(tx, ty, r) {
+  if (r) await setSpotSize(r);
   const [x, y] = await tile(tx, ty);
-  await moveTo(x, y); await page.mouse.down();
-  if (r) { const [x2, y2] = await tile(tx + r, ty); await page.mouse.move(x2, y2, { steps: 14 }); }
-  await page.mouse.up();
+  await moveTo(x, y); await page.mouse.down(); await page.waitForTimeout(60); await page.mouse.up();
 }
 async function clickOn(selector) {
   const b = await page.locator(selector).first().boundingBox();

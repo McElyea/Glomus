@@ -45,7 +45,7 @@ test("key bindings, hover, days, sounds and creatures are detected in the reques
   assert.ok(needs("press R to make it rain").includes("a key binding"));
   assert.ok(needs("Fire everywhere randomly for 2 days")[0].startsWith("days"));
   assert.ok(needs("play a thunder sound when it rains").includes("sounds"));
-  assert.ok(needs("a herd of deer that wanders the meadows").includes("creatures that move"));
+  assert.ok(needs("a herd of deer that wanders the meadows").includes("herds and packs"), "herds wait for step 3");
   assert.deepStrictEqual(needs("Carve a stream from here down into the nearest lake"), []);
   assert.deepStrictEqual(needs("A floodgate here that releases a burst of water for 10 seconds every 30 seconds"), []);
   assert.deepStrictEqual(needs("Let glowing moss creep along the river banks"), []);

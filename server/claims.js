@@ -38,7 +38,14 @@ const NEEDS = [
   { what: "dragging on the map", re: /\b(?:drag|drags|dragging|dragged|swipe)\b/i, unless: "dragTools" },
   { what: "days and hours (the world only has game seconds and minutes)", re: /\b(?:\d+|a|an|one|two|three|few|several|many)?\s*(?:days?|hours?|weeks?|months?|years?)\b|\bovernight\b|\btomorrow\b|\breal[- ]time\b/i },
   { what: "sounds", re: /\b(?:sounds?|music|noise|audio)\b/i },
-  { what: "creatures that move", re: /\b(?:animals?|creatures?|deer|wolf|wolves|birds?|fish|people|villagers?|monsters?|herds?|sheep|cows?|dragons?)\b/i },
+  // Animals are supported (species and releases); these parts of animal life aren't yet.
+  { what: "herds and packs", re: /\b(?:herds?|packs?|flocks?|swarms?|colon(?:y|ies)|troops?)\b/i },
+  { what: "breeding", re: /\b(?:breed|breeds|breeding|babies|offspring|young ones|reproduc\w*|mates?|mating|multiply)\b/i },
+  { what: "flying", re: /\b(?:fly|flies|flying|flew|soar\w*|wings?|birds?)\b/i },
+  { what: "swimming", re: /\b(?:swim\w*|underwater|fish)\b/i },
+  { what: "talking or tricks", re: /\b(?:talk\w*|speak\w*|tricks?|sing\w*)\b/i },
+  { what: "one animal hunting another", re: /\b(?:hunt\w*|prey|predators?|chase\w*)\b/i },
+  { what: "people", re: /\b(?:people|villagers?|humans?|persons?)\b/i },
   { what: "camera, zoom or 3D views", re: /\b(?:camera|zoom|3d|three[- ]dimensional|rotate the (?:map|view)|side view)\b/i },
 ];
 const WHIM_NEGATION = /\b(?:without|don't|do not|no need|not using|instead of)\b/i;

@@ -14,8 +14,7 @@ const run = (world, seconds) => { for (let t = 0; t < seconds * WF.TPS; t++) WF.
 
 test("a new world has a nature skein, a running spring and some water", () => {
   const w = fresh();
-  assert.strictEqual(w.skeins.length, 1);
-  assert.strictEqual(w.skeins[0].kind, "nature");
+  assert.deepStrictEqual(w.skeins.map((k) => [k.kind, k.name]), [["nature", "Nature (built in)"], ["nature", "Wildlife (built in)"]]);
   let wet = 0; for (let i = 0; i < WF.N; i++) if (w.water[i] > WF.WET) wet++;
   assert.ok(wet > 100, "only " + wet + " wet tiles");
 });
@@ -75,7 +74,7 @@ test("edits change the ground and erasing puts it back", () => {
   WF.eraseSkein(w, skein.id);
   assert.strictEqual(w.height[at(25, 20)], before[at(25, 20)]);
   assert.strictEqual(w.mat[at(25, 20)], matBefore[at(25, 20)]);
-  assert.strictEqual(w.skeins.length, 1);
+  assert.ok(w.skeins.every((k) => k.kind === "nature"), "only the built-in skeins are left");
 });
 
 test("a thread that adds water makes the area wet, and switching it off stops it", () => {
@@ -220,6 +219,7 @@ function still() {
   const w = fresh();
   w.skeins[0].on = false; w.water.fill(0); w.silt.fill(0); w.flux.fill(0);
   w.weather = { raining: false, until: 1e9 };
+  w.creatures = [];
   return w;
 }
 const add = (w, plan, spot = null) => WF.acceptPlan(w, WF.checkPlan(w, plan, spot).clean, { spot });
