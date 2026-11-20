@@ -85,6 +85,14 @@ You can't steer it. You can only change the land around it.
 OpenAI-compatible server with tool calling (Ollama, LM Studio, vLLM) works if its `baseUrl` and `alias`
 match; remove the `launch` section to use one that is already running.
 
+### In 3D
+
+Press **3D** in the header (or **V**) to see the same world in 3D, drawn with
+[Strata](https://github.com/Preponderous-Software/strata). Drag to turn it, scroll or pinch to zoom, and
+right-drag or Shift-drag to pan. Tapping the land picks a spot or uses a click tool, as on the map. Drag tools
+are drawn on the map. **Map** goes back to the flat view. http://127.0.0.1:8840/3d shows your saved world
+full-window and keeps it living. That page only watches, so nothing there is saved.
+
 ## How it's built
 
 - `game/world.js`: the world as an ES module with no DOM: terrain, water, erosion, weather, the thread
@@ -104,6 +112,13 @@ match; remove the `launch` section to use one that is already running.
 - `server/server.js`: the local server. Every whim is saved as a replayable case in `workspace/whims/`: the
   world it started from, the full transcript, each tool call and the result.
 - `server/model.js`: finds or starts the model server.
+- `game/view3d.js`: the 3D view. It turns the world into arrays (the ground, the water as one translucent
+  mesh, the animals and the spot ring) and hands them to `game/3d/glomus3d.wasm`, a small
+  [Strata web kit](https://github.com/Preponderous-Software/strata/blob/main/docs/WEB.md) scene built from
+  `view3d/glomus3d.cpp` by `view3d/build.sh` against Strata 0.9.0. It never changes the world. The built
+  files are committed and pinned in `game/3d/SHA256SUMS`, so playing needs no build. Strata is MIT
+  (`game/3d/STRATA-LICENSE`, `STRATA-THIRD-PARTY-NOTICES.md`). The engine loads only when the view is
+  first opened.
 
 A plan is data, not code: it can only name areas, materials, conditions and actions the game knows, with
 bounded amounts, so nothing a model writes reaches beyond the map. Every skein can be switched off, erased

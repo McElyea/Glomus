@@ -46,6 +46,8 @@
   .palette .size { display: inline-flex; gap: 4px; align-items: center; color: var(--muted); font-size: 12px; }
   .palette .size b { color: var(--text); min-width: 18px; text-align: center; font-variant-numeric: tabular-nums; }
   .palette .hintline { color: var(--muted); font-size: 12px; font-style: italic; }
+  canvas#map3d { display: block; width: 100%; aspect-ratio: 96 / 64; border-radius: 8px; background: #000; touch-action: none; }
+  canvas#map3d[hidden], canvas#map[hidden] { display: none; }
   canvas#map { display: block; width: 100%; height: auto; border-radius: 8px; cursor: crosshair; background: #000; touch-action: none; }
   .hover { color: var(--muted); font-size: 12px; min-height: 18px; font-variant-numeric: tabular-nums; }
   .timebar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
@@ -112,11 +114,12 @@
   <button id="rain" class="small" title="Start or stop the rain">Rain</button>
   <button id="pause" class="small" title="Space">Pause</button>
   <button id="speed" class="small" title="Simulation speed">1×</button>
+  <button id="view3d" class="small" title="See the world in 3D: drag to turn, scroll or pinch to zoom, tap to pick a spot or use a tool (V)" aria-pressed="false">3D</button>
   <button id="newworld" class="small">New world</button>
 </header>
 <main>
   <section class="mapcol">
-    <div class="mapwrap"><canvas id="map" width="960" height="640" aria-label="The world map. Click to pick a spot, or to use the tool you picked."></canvas></div>
+    <div class="mapwrap"><canvas id="map" width="960" height="640" aria-label="The world map. Click to pick a spot, or to use the tool you picked."></canvas><canvas id="map3d" hidden aria-label="The world in 3D. Drag to turn it, scroll or pinch to zoom, tap to pick a spot or use a tool."></canvas></div>
     <div id="hover" class="hover"></div>
     <div class="timebar">
       <span class="hint">Rewind</span>
@@ -872,6 +875,7 @@ document.addEventListener("keydown", (ev) => {
   if (ev.code === "Space") { ev.preventDefault(); $("pause").click(); }
   if (ev.key === "Escape") { if (tool !== "spot") selectTool("spot"); else { spot = null; showSpot(); } }
   if (/^[1-9]$/.test(ev.key) && !ev.ctrlKey && !ev.metaKey && !ev.altKey) { const t = paletteTools()[Number(ev.key) - 1]; if (t) selectTool(t.power.id); }
+  if (ev.key.toLowerCase() === "v" && !ev.ctrlKey && !ev.metaKey && !ev.altKey) toggle3d();
   if (ev.key === "[") changeSize(-1);
   if (ev.key === "]") changeSize(1);
   if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "z") { ev.preventDefault(); undoLastUse(); }
@@ -892,6 +896,38 @@ $("rewind").onclick = () => {
   WF.restore(world, pick.snap); history = history.slice(0, k); $("rewindRange").value = 0;
   renderSkeins(); updateRewind(); saveNow();
 };
+
+// ---------- the 3D view (view3d.js): loaded the first time it's asked for ----------
+let view3d = null, loading3d = false;
+function tapTile(x, y) {
+  const info = toolInfo(tool);
+  if (!info) { spot = { x, y, r: sizes.spot }; showSpot(); return; }
+  if (info.power.brush.stroke) { $("hover").textContent = `${info.power.name} is drawn by dragging: use it on the flat map.`; return; }
+  applyUse(info, { x, y, r: sizes[tool] }, x, y);
+  $("hover").textContent = useNote ? (useNote.message || `${info.power.name}: ${useNote.changed} tiles changed`) : "";
+}
+async function toggle3d() {
+  const on = $("map3d").hidden;
+  if (on && !view3d) {
+    if (loading3d) return;
+    loading3d = true; $("view3d").textContent = "3D…";
+    $("map3d").hidden = false; canvas.hidden = true;
+    try {
+      const { open3d } = await import("./view3d.js");
+      view3d = await open3d({ canvas: $("map3d"), mount: canvas.parentElement, WF, world: () => world, spot: () => spot, onTap: tapTile });
+    } catch (e) {
+      $("map3d").hidden = true; canvas.hidden = false; loading3d = false; $("view3d").textContent = "3D";
+      $("hover").textContent = `The 3D view couldn't start: ${e && e.message ? e.message : e}`;
+      return;
+    }
+    loading3d = false;
+  } else if (on) { $("map3d").hidden = false; canvas.hidden = true; view3d.resume(); }
+  else { view3d.pause(); $("map3d").hidden = true; canvas.hidden = false; fit(); }
+  $("view3d").textContent = $("map3d").hidden ? "3D" : "Map";
+  $("view3d").setAttribute("aria-pressed", String(!$("map3d").hidden));
+}
+$("view3d").onclick = toggle3d;
+window.__glomus3d = () => view3d;
 
 let last = performance.now(), carry = 0, lastSave = 0, lastUi = 0;
 function frame(now) {
