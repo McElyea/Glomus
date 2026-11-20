@@ -17,8 +17,12 @@ import { shapeWhim, localModel } from "./shaper.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const WORKSPACE = path.join(ROOT, "workspace");
-const FILES = { "/": "index.html", "/index.html": "index.html", "/world.js": "world.js" };
-const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8" };
+const FILES = { "/": "index.html", "/index.html": "index.html", "/world.js": "world.js",
+  // The 3D view (game/view3d.js and the Strata engine built into game/3d/).
+  "/3d": "3d.html", "/3d.html": "3d.html", "/view3d.js": "view3d.js",
+  "/3d/glomus3d.js": "3d/glomus3d.js", "/3d/glomus3d.wasm": "3d/glomus3d.wasm",
+  "/3d/strata-kit.js": "3d/strata-kit.js", "/3d/strata-loader.js": "3d/strata-loader.js" };
+const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".wasm": "application/wasm" };
 const IDLE_EXIT_MS = 10 * 60 * 1000;
 
 const args = process.argv.slice(2);

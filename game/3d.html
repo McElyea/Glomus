@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glomus in 3D</title>
+<style>
+  :root { --bg: #14171b; --line: #313842; --text: #e4e7eb; --muted: #9aa3ad; --accent: #7cc4e8; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  body { display: flex; flex-direction: column; }
+  header { display: flex; align-items: center; gap: 14px; padding: 10px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  header h1 { font-size: 17px; margin: 0; }
+  .muted { color: var(--muted); font-size: 12px; }
+  .spacer { flex: 1; }
+  a { color: var(--accent); }
+  main { position: relative; flex: 1; min-height: 0; }
+  #view { display: block; width: 100%; height: 100%; touch-action: none; }
+  #note { position: absolute; left: 12px; bottom: 10px; color: var(--muted); font-size: 12px; background: rgba(13,20,24,.7); padding: 3px 8px; border-radius: 6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Glomus in 3D</h1>
+  <span class="muted">Your saved world, still living. Watching only: nothing here is saved.</span>
+  <span class="spacer"></span>
+  <span id="clock" class="muted"></span>
+  <a href="./">Back to the map</a>
+</header>
+<main><canvas id="view" aria-label="The world in 3D. Drag to turn it, scroll or pinch to zoom."></canvas><div id="note">Drag to turn · scroll or pinch to zoom · right-drag to pan</div></main>
+<script type="module">
+import * as WF from "./world.js";
+import { open3d } from "./view3d.js";
+// The map's own save, read once. This page never writes it, so the map stays the one place the world changes.
+let world = null;
+try { const raw = localStorage.getItem("glomus.save.v1"); if (raw) world = WF.load(JSON.parse(raw)); } catch (e) { world = null; }
+if (!world) { world = WF.makeWorld((Math.random() * 2 ** 31) | 0); document.getElementById("note").textContent = "No saved world yet, so this is a new one. Play on the map to make it yours."; }
+const fmt = (tick) => { const s = Math.floor(tick / WF.TPS); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
+await open3d({ canvas: document.getElementById("view"), mount: document.querySelector("main"), WF, world: () => world });
+let last = performance.now(), carry = 0;
+function frame(now) {
+  carry += Math.min(0.25, (now - last) / 1000) * WF.TPS; last = now;
+  let steps = Math.min(Math.floor(carry), 40); carry -= Math.floor(carry);
+  while (steps-- > 0) WF.step(world);
+  document.getElementById("clock").textContent = `${fmt(world.tick)} · ${world.weather.raining ? "raining" : "clear"}`;
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+window.__glomusWorld = () => world;
+</script>
+</body>
+</html>
