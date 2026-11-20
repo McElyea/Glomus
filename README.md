@@ -144,5 +144,4 @@ from forward-one's cache; on a fresh checkout `kokoro-js` downloads it (about 90
 
 ## License
 
-Copyright (c) 2026 Jonathan McElyea. [Business Source License 1.1](LICENSE); see
-[commercial licensing](COMMERCIAL_LICENSE.md).
+Copyright (c) 2026 Jonathan McElyea. Released under the [MIT License](LICENSE).
