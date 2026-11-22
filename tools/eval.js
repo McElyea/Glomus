@@ -11,8 +11,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as WF from "../game/world.js";
-import * as Model from "../server/model.js";
-import { shapeWhim, localModel } from "../server/shaper.js";
+import * as Model from "../server/model-server/index.js";
+import { shapeWhim } from "../server/shaper.js";
 import { checkClaims } from "../server/claims.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -210,7 +210,7 @@ for (const c of suite.cases) {
       }
       caseBase = WF.save(w);
     }
-    const result = await shapeWhim({ world: WF.load(caseBase), spot: c.spot, whim: c.whim, model: localModel(config) });
+    const result = await shapeWhim({ world: WF.load(caseBase), spot: c.spot, whim: c.whim, model: Model.localModel(config), apiKey: config.apiKey });
     const without = WF.load(caseBase), withPlan = WF.load(caseBase);
     const knownMaterials = withPlan.materials.length;
     let plan = null, skein = null;
@@ -227,10 +227,11 @@ for (const c of suite.cases) {
     const newMaterials = new Set(withPlan.materials.map((_, j) => j).filter((j) => j >= knownMaterials));
     const checks = c.checks.map((check) => { const [ok, note] = judge(check, { result, without, withPlan, fires, ticks, plan, newMaterials, spot: c.spot }); return { type: check.type, ok, note }; });
     const passed = checks.every((x) => x.ok);
-    console.log(`${passed ? "PASS" : "FAIL"}  ${result.outcome}, ${result.seconds.toFixed(0)}s, ${result.toolCalls} tool calls  ` + checks.map((x) => `${x.ok ? "✓" : "✗"} ${x.type} (${x.note})`).join("  "));
+    const retries = result.events.filter((e) => e.kind === "retry").length;
+    console.log(`${passed ? "PASS" : "FAIL"}  ${result.outcome}, ${result.seconds.toFixed(0)}s${result.waitSeconds >= 1 ? ` (${result.waitSeconds.toFixed(0)}s before replies started)` : ""}, ${result.toolCalls} tool calls${retries ? `, ${retries} retried` : ""}  ` + checks.map((x) => `${x.ok ? "✓" : "✗"} ${x.type} (${x.note})`).join("  "));
     runs.push({ id: c.id, whim: c.whim, spot: c.spot, passed, checks, outcome: result.outcome, committed: result.committed, say: result.say, plan: result.plan,
       unsupported: result.unsupported, explain: result.explain,
-      error: result.error, seconds: result.seconds, toolCalls: result.toolCalls, events: result.events, messages: result.messages });
+      error: result.error, seconds: result.seconds, waitSeconds: result.waitSeconds, retries, toolCalls: result.toolCalls, events: result.events, messages: result.messages });
   }
 }
 

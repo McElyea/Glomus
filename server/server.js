@@ -12,19 +12,26 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as WF from "../game/world.js";
-import * as Model from "./model.js";
-import { shapeWhim, localModel } from "./shaper.js";
+import * as Model from "./model-server/index.js";
+import { shapeWhim } from "./shaper.js";
+import { createStore, MAX_SLOT_BYTES, SlotError } from "./worlds.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const WORKSPACE = path.join(ROOT, "workspace");
-const FILES = { "/": "index.html", "/index.html": "index.html", "/world.js": "world.js" };
-const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8" };
+// GLOMUS_WORKSPACE moves the token, whims and world slots elsewhere (tests use a temporary folder).
+const WORKSPACE = process.env.GLOMUS_WORKSPACE ? path.resolve(process.env.GLOMUS_WORKSPACE) : path.join(ROOT, "workspace");
+const FILES = { "/": "index.html", "/index.html": "index.html", "/world.js": "world.js",
+  // The 3D view (game/view3d.js and the Strata engine built into game/3d/).
+  "/3d": "3d.html", "/3d.html": "3d.html", "/view3d.js": "view3d.js", "/walk3d.js": "walk3d.js",
+  "/3d/glomus3d.js": "3d/glomus3d.js", "/3d/glomus3d.wasm": "3d/glomus3d.wasm",
+  "/3d/strata-kit.js": "3d/strata-kit.js", "/3d/strata-loader.js": "3d/strata-loader.js",
+  "/slots.js": "slots.js" };
+const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".wasm": "application/wasm" };
 const IDLE_EXIT_MS = 10 * 60 * 1000;
 
 const args = process.argv.slice(2);
 const port0 = Number(args[args.indexOf("--port") + 1]) || 8840;
 const config = Model.loadConfig(ROOT);
-const model = localModel(config);
+const model = Model.localModel(config);
 // The page's access token lives in the workspace, so restarting the server doesn't lock out open pages.
 const token = (() => {
   const file = path.join(WORKSPACE, "token.txt");
@@ -34,6 +41,7 @@ const token = (() => {
   fs.writeFileSync(file, t);
   return t;
 })();
+const slots = createStore(path.join(WORKSPACE, "worlds"), { WF });
 const jobs = new Map();
 let active = null, lastSeen = Date.now();
 
@@ -68,7 +76,7 @@ async function startWhim(input) {
   jobs.set(job.id, job); active = job;
   (async () => {
     try {
-      const result = await shapeWhim({ world, spot: input.spot, whim: input.whim, model, onEvent: (e) => job.events.push(e) });
+      const result = await shapeWhim({ world, spot: input.spot, whim: input.whim, model, apiKey: config.apiKey, onEvent: (e) => job.events.push(e) });
       job.result = { outcome: result.outcome, committed: result.committed, plan: result.plan, problems: result.problems,
         unsupported: result.unsupported, explain: result.explain, say: result.say,
         error: result.error, seconds: result.seconds, toolCalls: result.toolCalls };
@@ -82,6 +90,31 @@ async function startWhim(input) {
     }
   })();
   return job;
+}
+
+// World slots (server/worlds.js). Behind the same Host and token checks as every /api route.
+//   GET  /api/worlds          every slot: {name, rev, savedAt, savedBy, tick}
+//   GET  /api/worlds/<name>   one slot, with its world
+//   POST /api/worlds/<name>   {world, by, base}: base is the rev being replaced, or null for a new slot (409 if stale)
+async function worldRoute(req, res, url) {
+  let name = null;
+  if (url.pathname !== "/api/worlds") { try { name = decodeURIComponent(url.pathname.slice("/api/worlds/".length)); } catch { name = ""; } }
+  try {
+    if (req.method === "GET" && name === null) return send(res, 200, { ok: true, slots: slots.list() });
+    if (req.method === "GET") return send(res, 200, { ok: true, ...slots.read(name) });
+    if (req.method === "POST" && name !== null) {
+      slots.checkName(name);
+      if (Number(req.headers["content-length"]) > MAX_SLOT_BYTES) return send(res, 413, { ok: false, error: "too_large", message: "That world is too large to keep in a slot." });
+      let body;
+      try { body = await readBody(req, MAX_SLOT_BYTES); }
+      catch (e) { return send(res, e.message === "too large" ? 413 : 400, { ok: false, error: e.message === "too large" ? "too_large" : "bad_request" }); }
+      return send(res, 200, { ok: true, ...slots.write(name, { world: body.world, by: body.by, base: body.base ?? null }) });
+    }
+    return send(res, 404, { ok: false, error: "not_found" });
+  } catch (e) {
+    if (e instanceof SlotError) return send(res, e.status, { ok: false, error: e.error, message: e.message, ...e.extra });
+    return send(res, 500, { ok: false, error: "failed", message: "The slot couldn't be read or written." });
+  }
 }
 
 function handler(port) {
@@ -108,6 +141,7 @@ function handler(port) {
         const job = await startWhim({ whim, spot, world: body.world });
         return send(res, 200, { ok: true, id: job.id });
       }
+      if (url.pathname === "/api/worlds" || url.pathname.startsWith("/api/worlds/")) return worldRoute(req, res, url);
       const m = url.pathname.match(/^\/api\/whim\/([0-9a-f]{8})$/);
       if (req.method === "GET" && m) {
         const job = jobs.get(m[1]);
