@@ -1,0 +1,50 @@
+name: Arcade
+
+# Publishes the browser game to the arcade at
+# https://glomus.play.danielstephenson.dev, a static host for browser games.
+# What ships is game/ (the map page, world.js and the Strata 3D view), without
+# game/tools; no model server runs there, so it plays on hand-written plans.
+# It is off until the repository variable ARCADE_ENABLED is "true" (and the
+# ARCADE_TOKEN secret holds the upload token); "Run workflow" deploys by hand
+# either way.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || vars.ARCADE_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # --ignore-scripts: onnxruntime-node's install script downloads CUDA
+      # binaries, which the tests don't need.
+      - run: npm ci --ignore-scripts
+      - run: npm test
+      # The 3D view's tests drive the page in headless Chromium.
+      - run: npx playwright-core install --with-deps chromium-headless-shell
+      - run: npm run test:3d
+      - name: Check the Strata bundle against its checksums
+        working-directory: game/3d
+        run: sha256sum -c SHA256SUMS
+      - name: Gather the site
+        run: |
+          site="$RUNNER_TEMP/site"
+          cp -r game "$site"
+          rm -rf "$site/tools"
+          echo "SITE=$site" >> "$GITHUB_ENV"
+          echo "$(node -p "require('./package.json').version")+g${GITHUB_SHA::7}" > "$RUNNER_TEMP/arcade-version.txt"
+          find "$site" -type f | sort
+      - uses: Stephenson-Software/arcade-deploy@v1
+        with:
+          slug: glomus
+          token: ${{ secrets.ARCADE_TOKEN }}
+          site-dir: ${{ env.SITE }}
+          version-file: ${{ runner.temp }}/arcade-version.txt
