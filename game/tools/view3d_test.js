@@ -55,7 +55,18 @@ const base = await new Promise((resolve, reject) => {
 });
 
 const { chromium } = playwright();
-const browser = await chromium.launch({ headless: true, args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"] });
+// Playwright's own Chromium when it's installed (npx playwright install chromium); otherwise an installed Edge or
+// Chrome, so the suite runs on a machine that only has those (the demo recorders already use Edge).
+const launchOptions = { headless: true, args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"] };
+async function launchBrowser() {
+  const tries = [{}, { channel: "msedge" }, { channel: "chrome" }], failures = [];
+  for (const extra of tries) {
+    try { return await chromium.launch({ ...launchOptions, ...extra }); }
+    catch (e) { failures.push(`${extra.channel || "Playwright's Chromium"}: ${String(e.message).split("\n")[0]}`); }
+  }
+  throw new Error("No browser to run the 3D tests in. Run `npx playwright install chromium`, or install Edge or Chrome.\n" + failures.join("\n"));
+}
+const browser = await launchBrowser();
 
 // ---------- helpers that run in the page ----------
 const errors = [];
@@ -63,7 +74,9 @@ async function openPage(contextOptions) {
   const context = await browser.newContext(contextOptions);
   const page = await context.newPage();
   page.on("pageerror", (e) => errors.push(`${contextOptions.label}: ${e.message}`));
-  page.on("console", (m) => { if (m.type() === "error") errors.push(`${contextOptions.label} console: ${m.text()}`); });
+  page.on("console", (m) => { if (m.type() === "error" && !/^Failed to load resource/.test(m.text())) errors.push(`${contextOptions.label} console: ${m.text()}`); });
+  // Name the file when a request fails, instead of the console's anonymous "Failed to load resource".
+  page.on("response", (r) => { if (r.status() >= 400) errors.push(`${contextOptions.label}: ${r.status()} for ${new URL(r.url()).pathname}`); });
   await page.goto(base + "?seed=5");
   await page.evaluate((plan) => {
     document.getElementById("planText").value = JSON.stringify(plan);

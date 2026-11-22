@@ -28,7 +28,8 @@ await test("a slot keeps a world, who wrote it and when, and reads back the same
   const back = store.read("valley");
   assert.deepStrictEqual(back.world, world);
   assert.deepStrictEqual(store.list().map((s) => s.name), ["valley"]);
-  assert.strictEqual(fs.statSync(path.join(dir, "valley.json")).mode & 0o777, 0o600);
+  // Owner-only permissions exist on Linux and macOS; Windows has no Unix file modes (it reports 0o666).
+  if (process.platform !== "win32") assert.strictEqual(fs.statSync(path.join(dir, "valley.json")).mode & 0o777, 0o600);
 });
 
 await test("names are checked: no paths, dots, capitals, spaces or empty names", () => {
